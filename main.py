@@ -44,7 +44,7 @@ def detect_lines(frame):
 
     return frame, lines if lines is not None else []
 
-def recursive_merge_lines(lines, merge_angle_tolerance=35, distance_threshold=50, min_overlap_ratio=0.5):
+def recursive_merge_lines(lines, towards_merge_angle_tolerance = 35, away_merge_angle_tolerance = 25, distance_threshold = 50, max_line_gap = 15):
     merged_lines = []
     unmerged_lines = []
     lines = [line.tolist() for line in lines]
@@ -52,41 +52,49 @@ def recursive_merge_lines(lines, merge_angle_tolerance=35, distance_threshold=50
     while len(lines) > 0:
         line = lines.pop(0)
         x1, y1, x2, y2 = line[0]
-
         merged_line = [line]
 
         for i in range(len(lines)):
+            towards = False
             next_line = lines[i]
             x3, y3, x4, y4 = next_line[0]
 
-            angle = math.atan2(y2 - y1, x2 - x1) - math.atan2(y4 - y3, x4 - x3)
-            angle = math.degrees(angle)
-            angle = abs(angle)
+            dir1 = (x2 - x1, y2 - y1)
+            dir2 = (x4 - x3, y4 - y3)
 
-            if angle < merge_angle_tolerance:
+            angle1 = math.atan2(dir1[1], dir1[0])
+            angle2 = math.atan2(dir2[1], dir2[0])
+
+            print(math.degrees(angle1), math.degrees(angle2))
+
+            #if 
+            angle_diff = abs(math.degrees(angle1 - angle2))
+
+            if angle_diff > 90:
+                angle_diff = 180 - angle_diff
+
+            if angle_diff < towards_merge_angle_tolerance or angle_diff < away_merge_angle_tolerance:
                 distance = math.sqrt((x3 - x1) ** 2 + (y3 - y1) ** 2)
 
                 if distance < distance_threshold:
                     distance = math.sqrt((x4 - x2) ** 2 + (y4 - y2) ** 2)
 
                     if distance < distance_threshold:
-                        overlap = 0
+                        gap = math.sqrt((x3 - x2) ** 2 + (y3 - y2) ** 2)
 
-                        if x1 == x2:
-                            overlap = (min(y1, y2) - max(y3, y4)) / (min(y1, y2) - max(y1, y2))
-                        else:
-                            overlap = (min(x1, x2) - max(x3, x4)) / (min(x1, x2) - max(x1, x2))
-
-                        if overlap > min_overlap_ratio:
+                        if gap < max_line_gap:
                             merged_line.append(next_line)
 
         if len(merged_line) > 1:
             merged_lines.append(merged_line)
-
+            
         else:
             unmerged_lines.append(line)
 
     return merged_lines, unmerged_lines
+
+def detect_curved_lines(frame, distance_threshold = 50, contour_toward_tolerance = 75, contour_away_tolerance=75):
+    pass
 
 def frame_rate(frame, fps):
     delay = 1 / fps
@@ -110,7 +118,7 @@ def main():
             print("Error: Could not read frame.")
             break
 
-        frame = cv.imread(r"c:\Users\Owner\Pictures\Screenshots\Screenshot 2025-02-02 202610.png")
+        #frame = cv.imread("/Users/pl1001515/Downloads/cruved0.jpeg") 
 
         #frame = frame_rate(frame, fps)
         pre_frame = preprocess_frame(frame)
