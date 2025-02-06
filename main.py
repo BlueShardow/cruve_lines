@@ -178,16 +178,35 @@ def calculate_distances(contour1, contour2): # WORK ON ADDING THIS IN __________
             distances.append(distance)
     return distances
 
+"""
 # Example usage
 contour1 = np.array([[[0, 0]], [[1, 1]], [[2, 2]]])
 contour2 = np.array([[[3, 3]], [[4, 4]], [[5, 5]]])
 
 distances = calculate_distances(contour1, contour2)
 print("Distances:", distances)
+"""
 
-def merge_curved_lines(contours, min_distance = 50, merge_angle_tolerance = 20, difference_tolerance = 10):
+def merge_curved_lines(contours, min_distance = 75, merge_angle_tolerance = 50, difference_tolerance = 50):
+    contours = [np.array(contour) if isinstance(contour, tuple) else contour for contour in contours]
+
     def weighted_average(p1, w1, p2, w2):
         return (p1 * w1 + p2 * w2) / (w1 + w2)
+    
+    def fix_contour_shape(contour):
+        # Case 1: If contour is already in a valid shape, return it directly
+        if len(contour.shape) == 3 and contour.shape[1] == 1:
+            return contour
+        if len(contour.shape) == 2 and contour.shape[1] == 2:
+            return contour
+        
+        # Case 2: If contour is flat like (4,), reshape it to [[x1, y1], [x2, y2]]
+        if contour.shape == (4,):
+            return np.array([[[contour[0], contour[1]]], [[contour[2], contour[3]]]])
+
+        # Case 3: If it’s a single point or invalid, skip it
+        print(f"Skipping contour due to invalid shape: {contour.shape}")
+        return None
 
     def merge_once(contours):
         merged_contours = []
@@ -196,17 +215,35 @@ def merge_curved_lines(contours, min_distance = 50, merge_angle_tolerance = 20, 
         for i, contour1 in enumerate(contours):
             if used[i]:
                 continue
+            
+            contour1 = np.array(contour1)
+            result = fix_contour_shape(contour1)
+
+            if result is None: # HERE ___________________________________________________________________________________________ (prints before but no after)
+                continue
+
+            (new_x1, new_y1), (new_x2, new_y2) = result
+            contour_weight1 = cv.arcLength(contour1, True)
+            print("a")
 
             for j, contour2 in enumerate(contours):
                 if i != j and not used[j]:
+                    contour2 = np.array(contour2)
                     distance_sim = cv.matchShapes(contour1, contour2, cv.CONTOURS_MATCH_I1, 0)
-                    difference_roc = abs(abs(rate_of_change(contour1) - abs(rate_of_change(contour2))))
-                    contour_weight1 = cv.arcLength(contour1)
-                    contour_weight2 = cv.arcLength(contour2)
+                    difference_roc = difference_roc = abs(np.mean(rate_of_change(contour1)) - np.mean(rate_of_change(contour2)))
+                    contour_weight1 = cv.arcLength(contour1, True)
+                    contour_weight2 = cv.arcLength(contour2, True)
+
+                    #print("Distance Similarity:", distance_sim, "Difference ROC:", difference_roc)
 
                     if distance_sim < difference_tolerance and difference_roc < merge_angle_tolerance:
-                        new_x1, new_y1 = weighted_average(contour1[0][0][0], contour_weight1, contour2[0][0][0], contour_weight2), weighted_average(contour1[0][0][1], contour_weight1, contour2[0][0][1], contour_weight2)
-                        new_x2, new_y2 = weighted_average(contour1[-1][0][0], contour_weight1, contour2[-1][0][0], contour_weight2), weighted_average(contour1[-1][0][1], contour_weight1, contour2[-1][0][1], contour_weight2)
+                        (x1, y1), (x2, y2) = fix_contour_shape(contour2)
+
+                        if x1 is not None and y1 is not None:  
+                            new_x1 = weighted_average(new_x1, contour_weight1, x1, contour_weight2)
+                            new_y1 = weighted_average(new_y1, contour_weight1, y1, contour_weight2)
+                            new_x2 = weighted_average(new_x2, contour_weight1, x2, contour_weight2)
+                            new_y2 = weighted_average(new_y2, contour_weight1, y2, contour_weight2)
                     
                     used[j] = True
 
@@ -280,7 +317,7 @@ def main():
         if len(contours) > 0:
             merged_contours = merge_curved_lines(contours)
 
-            for merged_contour in merged_contours:
+            for merged_contour in merged_contours: # NO merged_contours ___________________________________________________________
                 x1, y1, x2, y2 = merged_contour
                 cv.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
 
