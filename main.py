@@ -20,17 +20,12 @@ def enhance_contrast(frame):
 
 def preprocess_frame(frame):
     frame = cv.cvtColor(frame, cv.COLOR_BGR2GRAY)
-    frame = cv.bilateralFilter(frame, 15, 75, 75)
+    frame = cv.bilateralFilter(frame, 9, 75, 75)
 
     return frame
 
-"""(frame, max_line_gap=85, toward_tolerance=75, away_tolerance=75, merge_angle_tolerance=65,
-                              distance_threshold=999999999, min_distance=250, min_line_length=150,
-                              min_overlap_ratio=0.8,
-                              proximity_threshold=20):"""
-
 def detect_lines(frame):
-    edges = cv.Canny(frame, 50, 150, apertureSize=3)
+    edges = cv.Canny(frame, 50, 150, apertureSize = 3)
     lines = cv.HoughLinesP(edges, rho = 1, theta = np.pi / 180, threshold = 100, minLineLength = 50, maxLineGap = 85)
 
     if len(frame.shape) == 2 or frame.shape[2] == 1:
@@ -46,23 +41,50 @@ def detect_lines(frame):
 
 def line_length(line):
     x1, y1, x2, y2 = line
-    return np.hypot((x2 - x1) ** 2 + (y2 - y1) ** 2)
+    return np.hypot((x2 - x1), (y2 - y1))
 
 def calculate_angle(line):
-    """
-    Calculates the angle of a line in degrees.
-    """
     x1, y1, x2, y2 = line
     angle = math.atan2(y2 - y1, x2 - x1) * 180 / np.pi
+
     while angle < 0:
         angle += 180
+
     while angle > 180:
         angle -= 180
+
     return angle
 
-def merge_lines(lines, min_distance = 250, merge_angle_tolerance = 65, vertical_leeway=1.5, horizontal_leeway=1.5):
+def is_parallel(line1, line2, toward_tolerance, away_tolerance, distance_threshold):
+    x1, y1, x2, y2 = line1
+    x3, y3, x4, y4 = line2
+
+    angle1 = calculate_angle(line1)
+    angle2 = calculate_angle(line2)
+
+    angle_diff = abs(angle1 - angle2)
+    if angle_diff > toward_tolerance and (180 - angle_diff) > away_tolerance:
+        return False
+
+    # Horizontal or vertical check
+    is_horizontal1 = abs(y2 - y1) < abs(x2 - x1)
+    is_horizontal2 = abs(y4 - y3) < abs(x4 - x3)
+
+    # Check alignment and proximity
+    if is_horizontal1 and is_horizontal2:
+        vertical_distance = abs((y1 + y2) / 2 - (y3 + y4) / 2)
+
+        return vertical_distance < distance_threshold
+
+    elif not is_horizontal1 and not is_horizontal2:
+        horizontal_distance = abs((x1 + x2) / 2 - (x3 + x4) / 2)
+
+        return horizontal_distance < distance_threshold
+
+    return False
+
+def merge_lines(lines, min_distance = 50, merge_angle_tolerance = 20, vertical_leeway = 1.5, horizontal_leeway = 1.5):
     def weighted_average(p1, w1, p2, w2):
-        """Computes a weighted average of two points."""
         return (p1 * w1 + p2 * w2) / (w1 + w2)
 
     def merge_once(lines):
@@ -83,22 +105,21 @@ def merge_lines(lines, min_distance = 250, merge_angle_tolerance = 65, vertical_
                     x3, y3, x4, y4 = line2
                     angle2 = calculate_angle(line2)
 
-                    # Check parallelism
                     if is_parallel(line1, line2, merge_angle_tolerance, merge_angle_tolerance, min_distance):
                         is_horizontal1 = abs(y2 - y1) < abs(x2 - x1)
                         is_horizontal2 = abs(y4 - y3) < abs(x4 - x3)
 
-                        # Apply separate logic for merging based on orientation
                         if is_horizontal1 and is_horizontal2:
-                            # Horizontal lines: More leeway in horizontal, less in vertical
                             vertical_distance = abs((y1 + y2) / 2 - (y3 + y4) / 2)
                             horizontal_distance = abs((x1 + x2) / 2 - (x3 + x4) / 2)
+
                             if vertical_distance > min_distance * horizontal_leeway or horizontal_distance > min_distance:
                                 continue
+
                         elif not is_horizontal1 and not is_horizontal2:
-                            # Vertical lines: More leeway in vertical, less in horizontal
                             vertical_distance = abs((y1 + y2) / 2 - (y3 + y4) / 2)
                             horizontal_distance = abs((x1 + x2) / 2 - (x3 + x4) / 2)
+
                             if vertical_distance > min_distance or horizontal_distance > min_distance * vertical_leeway:
                                 continue
 
@@ -116,10 +137,14 @@ def merge_lines(lines, min_distance = 250, merge_angle_tolerance = 65, vertical_
 
         return merged_lines
 
+    # Convert to a flattened list of (x1, y1, x2, y2)
+    lines = [line[0] for line in lines]
+
     # Perform iterative merging until lines stabilize
     prev_lines = []
+
     while prev_lines != lines:
-        prev_lines = lines
+        prev_lines = lines.copy()
         lines = merge_once(lines)
 
     return lines
@@ -136,16 +161,68 @@ def detect_curved_lines(frame, contour_approx_tolerance = .005):
 
     return approx_contours
 
-def is_parallel(line1, line2, tolerance=5):
-    pass
+def rate_of_change(contour):
+    contour_points = contour[:, 0, :]
+    differences = np.diff(contour_points, axis = 0)
+    rate_of_change = np.linalg.norm(differences, axis = 1)
 
-    """if (x1 or x2 < x3 or x4) and angle1 < 0 and angle2 > 0: # if x1 is on left and towards
-                towards = True
-            
-            elif (x1 or x2 > x3 or x4) and angle1 > 0 and angle2 < 0: # if x1 is on right and towards
-                towards = True
+    return rate_of_change
 
-            if towards:"""
+def calculate_distances(contour1, contour2): # WORK ON ADDING THIS IN _______________________________________________________________________________________
+    distances = []
+    for point1 in contour1:
+        for point2 in contour2:
+            x1, y1 = point1[0]
+            x2, y2 = point2[0]
+            distance = np.sqrt((x2 - x1) ** 2 + (y2 - y1) ** 2)
+            distances.append(distance)
+    return distances
+
+# Example usage
+contour1 = np.array([[[0, 0]], [[1, 1]], [[2, 2]]])
+contour2 = np.array([[[3, 3]], [[4, 4]], [[5, 5]]])
+
+distances = calculate_distances(contour1, contour2)
+print("Distances:", distances)
+
+def merge_curved_lines(contours, min_distance = 50, merge_angle_tolerance = 20, difference_tolerance = 10):
+    def weighted_average(p1, w1, p2, w2):
+        return (p1 * w1 + p2 * w2) / (w1 + w2)
+
+    def merge_once(contours):
+        merged_contours = []
+        used = [False] * len(contours)
+
+        for i, contour1 in enumerate(contours):
+            if used[i]:
+                continue
+
+            for j, contour2 in enumerate(contours):
+                if i != j and not used[j]:
+                    distance_sim = cv.matchShapes(contour1, contour2, cv.CONTOURS_MATCH_I1, 0)
+                    difference_roc = abs(abs(rate_of_change(contour1) - abs(rate_of_change(contour2))))
+                    contour_weight1 = cv.arcLength(contour1)
+                    contour_weight2 = cv.arcLength(contour2)
+
+                    if distance_sim < difference_tolerance and difference_roc < merge_angle_tolerance:
+                        new_x1, new_y1 = weighted_average(contour1[0][0][0], contour_weight1, contour2[0][0][0], contour_weight2), weighted_average(contour1[0][0][1], contour_weight1, contour2[0][0][1], contour_weight2)
+                        new_x2, new_y2 = weighted_average(contour1[-1][0][0], contour_weight1, contour2[-1][0][0], contour_weight2), weighted_average(contour1[-1][0][1], contour_weight1, contour2[-1][0][1], contour_weight2)
+                    
+                    used[j] = True
+
+            merged_contours.append((int(new_x1), int(new_y1), int(new_x2), int(new_y2)))
+            used[i] = True
+
+        return merged_contours
+
+    # Perform iterative merging until contours stabilize
+    prev_contours = []
+
+    while prev_contours != contours:
+        prev_contours = contours.copy()
+        contours = merge_once(contours)
+
+    return contours
 
 def display_fps(frame, start_time):
     fps = int(1 / (time.time() - start_time))
@@ -170,38 +247,24 @@ def main():
 
         frame = cv.imread("/Users/pl1001515/Downloads/cruved.jpeg") 
 
-        #frame = frame_rate(frame, fps)
+        frame = resize_frame(frame)
         pre_frame = preprocess_frame(frame)
-        resized_frame = resize_frame(pre_frame)
-        contrast_frame = enhance_contrast(resized_frame)
+        contrast_frame = enhance_contrast(pre_frame)
 
         cv.imshow('Camera Feed', contrast_frame)
 
         line_frame, lines = detect_lines(contrast_frame)
-        
-        cv.imshow('Line Detection', line_frame)
 
-        frame = resize_frame(frame)
+        cv.imshow('Line Detection', line_frame)
 
         if len(lines) > 0:
             merged_lines = merge_lines(lines)
 
-            """
-            if len(unmerged_lines) > 0:
-                for unmerged_line in unmerged_lines:
-                    x1, y1, x2, y2 = unmerged_line[0]
-                    cv.line(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
-            """
-
-            if len(merged_lines) > 0:
-                for merged_line in merged_lines:
-                    x1, y1, x2, y2 = merged_line[0]
-                    x3, y3, x4, y4 = merged_line[-1]
-                    cv.line(frame, (x1, y1), (x4, y4), (0, 255, 0), 2)
+            for merged_line in merged_lines:
+                x1, y1, x2, y2 = merged_line
+                cv.line(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
 
         print("Merged Lines:", len(merged_lines))
-        
-        #"\nUnmerged Lines:", len(unmerged_lines))
 
         cv.imshow('Merged Lines', frame)
 
@@ -213,6 +276,17 @@ def main():
             
         contour_frame = display_fps(contour_frame, start_time)
         cv.imshow('Curved Line Detection', contour_frame)
+
+        if len(contours) > 0:
+            merged_contours = merge_curved_lines(contours)
+
+            for merged_contour in merged_contours:
+                x1, y1, x2, y2 = merged_contour
+                cv.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
+
+        print("Merged Contours:", len(merged_contours))
+
+        cv.imshow('Merged Curved Lines', frame)
 
         if cv.waitKey(1) & 0xFF == ord('q'):
             break
