@@ -4,6 +4,7 @@ import math
 import os
 import time
 import sys
+from scipy.spatial.distance import cdist, directed_hausdorff
 
 def resize_frame(frame):
     height, width = frame.shape[:2]
@@ -55,7 +56,7 @@ def calculate_angle(line):
 
     return angle
 
-def is_parallel(line1, line2, toward_tolerance, away_tolerance, distance_threshold):
+def is_parallel_lines(line1, line2, toward_tolerance, away_tolerance, distance_threshold):
     x1, y1, x2, y2 = line1
     x3, y3, x4, y4 = line2
 
@@ -63,6 +64,7 @@ def is_parallel(line1, line2, toward_tolerance, away_tolerance, distance_thresho
     angle2 = calculate_angle(line2)
 
     angle_diff = abs(angle1 - angle2)
+
     if angle_diff > toward_tolerance and (180 - angle_diff) > away_tolerance:
         return False
 
@@ -83,6 +85,17 @@ def is_parallel(line1, line2, toward_tolerance, away_tolerance, distance_thresho
 
     return False
 
+def is_parallel_curves(contour1, contour2, roc_tolerance, distance_threshold):
+
+    distance_sim = cv.matchShapes(contour1, contour2, cv.CONTOURS_MATCH_I1, 0)
+    difference_roc = abs(np.mean(rate_of_change(contour1)) - np.mean(rate_of_change(contour2)))
+
+    if distance_sim < distance_threshold and difference_roc < roc_tolerance:
+        return True
+    
+    else:
+        return False
+
 def merge_lines(lines, min_distance = 50, merge_angle_tolerance = 20, vertical_leeway = 1.5, horizontal_leeway = 1.5):
     def weighted_average(p1, w1, p2, w2):
         return (p1 * w1 + p2 * w2) / (w1 + w2)
@@ -96,16 +109,14 @@ def merge_lines(lines, min_distance = 50, merge_angle_tolerance = 20, vertical_l
                 continue
 
             x1, y1, x2, y2 = line1
-            angle1 = calculate_angle(line1)
             new_x1, new_y1, new_x2, new_y2 = x1, y1, x2, y2
             line_weight = line_length(line1)
 
             for j, line2 in enumerate(lines):
                 if i != j and not used[j]:
                     x3, y3, x4, y4 = line2
-                    angle2 = calculate_angle(line2)
 
-                    if is_parallel(line1, line2, merge_angle_tolerance, merge_angle_tolerance, min_distance):
+                    if is_parallel_lines(line1, line2, merge_angle_tolerance, merge_angle_tolerance, min_distance):
                         is_horizontal1 = abs(y2 - y1) < abs(x2 - x1)
                         is_horizontal2 = abs(y4 - y3) < abs(x4 - x3)
 
@@ -149,7 +160,7 @@ def merge_lines(lines, min_distance = 50, merge_angle_tolerance = 20, vertical_l
 
     return lines
 
-def detect_curved_lines(frame, contour_approx_tolerance = .005):
+def detect_curved_lines(frame, contour_approx_tolerance = .002):
     edges = cv.Canny(frame, 50, 150, apertureSize=3)
     contours, _ = cv.findContours(edges, cv.RETR_TREE, cv.CHAIN_APPROX_SIMPLE)
     approx_contours = []
@@ -168,15 +179,13 @@ def rate_of_change(contour):
 
     return rate_of_change
 
-def calculate_distances(contour1, contour2): # WORK ON ADDING THIS IN _______________________________________________________________________________________
-    distances = []
-    for point1 in contour1:
-        for point2 in contour2:
-            x1, y1 = point1[0]
-            x2, y2 = point2[0]
-            distance = np.sqrt((x2 - x1) ** 2 + (y2 - y1) ** 2)
-            distances.append(distance)
-    return distances
+def calculate_distances(contour1, contour2):
+    points1 = contour1[:, 0, :]
+    points2 = contour2[:, 0, :]
+
+    distances = np.mean(cdist(points1, points2))
+
+    return distances.flatten()  # Return a 1D array of all distances
 
 """
 # Example usage
@@ -187,8 +196,31 @@ distances = calculate_distances(contour1, contour2)
 print("Distances:", distances)
 """
 
-def merge_curved_lines(contours, min_distance = 75, merge_angle_tolerance = 50, difference_tolerance = 50):
+def contours_are_stable(prev_contours, new_contours, length_tolerance = 2, shape_tolerance = .05):
+    if len(prev_contours) != len(new_contours):
+        return False
+    
+    for c1, c2 in zip(prev_contours, new_contours):
+        # Simplify shapes to reduce noise in comparisons
+        epsilon1 = 0.01 * cv.arcLength(c1, True)
+        epsilon2 = 0.01 * cv.arcLength(c2, True)
+        simplified_c1 = cv.approxPolyDP(c1, epsilon1, True)
+        simplified_c2 = cv.approxPolyDP(c2, epsilon2, True)
+        
+        # Check arc length similarity
+        length_diff = abs(cv.arcLength(simplified_c1, True) - cv.arcLength(simplified_c2, True))
+        
+        # Check shape similarity using matchShapes
+        shape_diff = cv.matchShapes(simplified_c1, simplified_c2, cv.CONTOURS_MATCH_I1, 0)
+        
+        if length_diff > length_tolerance or shape_diff > shape_tolerance:
+            return False
+    
+    return True
+"""
+def merge_curved_lines(contours, min_distance = 75, merge_angle_tolerance = 50, difference_tolerance = 50, contour_approx_tolerance = .005):
     contours = [np.array(contour) if isinstance(contour, tuple) else contour for contour in contours]
+    iteration_count = 0
 
     def weighted_average(p1, w1, p2, w2):
         return (p1 * w1 + p2 * w2) / (w1 + w2)
@@ -197,6 +229,7 @@ def merge_curved_lines(contours, min_distance = 75, merge_angle_tolerance = 50, 
         # Case 1: If contour is already in a valid shape, return it directly
         if len(contour.shape) == 3 and contour.shape[1] == 1:
             return contour
+
         if len(contour.shape) == 2 and contour.shape[1] == 2:
             return contour
         
@@ -205,8 +238,9 @@ def merge_curved_lines(contours, min_distance = 75, merge_angle_tolerance = 50, 
             return np.array([[[contour[0], contour[1]]], [[contour[2], contour[3]]]])
 
         # Case 3: If it’s a single point or invalid, skip it
-        print(f"Skipping contour due to invalid shape: {contour.shape}")
-        return None
+        else:
+            print(f"Skipping contour due to invalid shape: {contour.shape}")
+            return None
 
     def merge_once(contours):
         merged_contours = []
@@ -215,51 +249,189 @@ def merge_curved_lines(contours, min_distance = 75, merge_angle_tolerance = 50, 
         for i, contour1 in enumerate(contours):
             if used[i]:
                 continue
-            
-            contour1 = np.array(contour1)
-            result = fix_contour_shape(contour1)
 
-            if result is None: # HERE ___________________________________________________________________________________________ (prints before but no after)
-                continue
-
-            (new_x1, new_y1), (new_x2, new_y2) = result
-            contour_weight1 = cv.arcLength(contour1, True)
-            print("a")
+            # Start with all points from contour1
+            merged_points = list(contour1[:, 0, :])
+            #contour_weight1 = cv.arcLength(contour1, True)
 
             for j, contour2 in enumerate(contours):
                 if i != j and not used[j]:
-                    contour2 = np.array(contour2)
                     distance_sim = cv.matchShapes(contour1, contour2, cv.CONTOURS_MATCH_I1, 0)
-                    difference_roc = difference_roc = abs(np.mean(rate_of_change(contour1)) - np.mean(rate_of_change(contour2)))
-                    contour_weight1 = cv.arcLength(contour1, True)
-                    contour_weight2 = cv.arcLength(contour2, True)
+                    difference_roc = abs(np.mean(rate_of_change(contour1)) - np.mean(rate_of_change(contour2)))
+                    distance_points = calculate_distances(contour1, contour2)
 
-                    #print("Distance Similarity:", distance_sim, "Difference ROC:", difference_roc)
+                    if distance_sim < difference_tolerance and difference_roc < merge_angle_tolerance and distance_points < min_distance:
+                        # Merge points from contour2 into contour1
+                        merged_points.extend(contour2[:, 0, :])
+                        used[j] = True
 
-                    if distance_sim < difference_tolerance and difference_roc < merge_angle_tolerance:
-                        (x1, y1), (x2, y2) = fix_contour_shape(contour2)
+            merged_contour = np.array(merged_points).reshape((-1, 1, 2)).astype(np.int32)
+            epsilon = contour_approx_tolerance * cv.arcLength(merged_contour, True)
+            simplified_contour = cv.approxPolyDP(merged_contour, epsilon, True)
+            merged_contours.append(simplified_contour)
 
-                        if x1 is not None and y1 is not None:  
-                            new_x1 = weighted_average(new_x1, contour_weight1, x1, contour_weight2)
-                            new_y1 = weighted_average(new_y1, contour_weight1, y1, contour_weight2)
-                            new_x2 = weighted_average(new_x2, contour_weight1, x2, contour_weight2)
-                            new_y2 = weighted_average(new_y2, contour_weight1, y2, contour_weight2)
-                    
-                    used[j] = True
-
-            merged_contours.append((int(new_x1), int(new_y1), int(new_x2), int(new_y2)))
             used[i] = True
 
         return merged_contours
 
+    contours = [fix_contour_shape(c) for c in contours if fix_contour_shape(c) is not None]
+
     # Perform iterative merging until contours stabilize
     prev_contours = []
 
-    while prev_contours != contours:
-        prev_contours = contours.copy()
-        contours = merge_once(contours)
+    while iteration_count < 25:
+        if iteration_count >= 24:
+            print("\nContours did not stabilize within 25 iterations.\n")
+            break
+
+        new_contours = merge_once(prev_contours)
+
+        if contours_are_stable(prev_contours, new_contours):
+            break
+
+        prev_contours = new_contours
+        iteration_count += 1
 
     return contours
+"""
+
+def draw_midline_lines(frame, lines):
+    for i in range(len(lines)):
+        for j in range(i + 1, len(lines)):
+            line1 = lines[i]
+            x1, y1, x2, y2 = line1
+
+            line2 = lines[j]
+            x3, y3, x4, y4 = line2
+
+            if is_parallel_lines(line1, line2, 25, 15, 9999):
+                x_mid1 = (x1 + x3) // 2
+                y_mid1 = (y1 + y3) // 2
+                x_mid2 = (x2 + x4) // 2
+                y_mid2 = (y2 + y4) // 2
+
+                cv.line(frame, (x_mid1, y_mid1), (x_mid2, y_mid2), (255, 0, 0), 2)
+
+    return frame
+
+def draw_midline_curves(frame, contours):
+    for i in range(len(contours)):
+        for j in range(i + 1, len(contours)):
+            contour1 = contours[i]
+            contour2 = contours[j]
+
+            if is_parallel_curves(contour1, contour2, 50, 50):
+                min_length = min(len(contour1), len(contour2))
+
+                for k in range(min_length):
+                    x1, y1 = contour1[k][0]
+                    x2, y2 = contour2[k][0]
+
+                    x_mid = (x1 + x2) // 2
+                    y_mid = (y1 + y2) // 2
+
+                    if k < min_length - 1:
+                        x1_next, y1_next = contour1[k + 1][0]
+                        x2_next, y2_next = contour2[k + 1][0]
+
+                        x_mid_next = (x1_next + x2_next) // 2
+                        y_mid_next = (y1_next + y2_next) // 2
+
+                        cv.line(frame, (x_mid, y_mid), (x_mid_next, y_mid_next), (255, 0, 0), 2)
+
+                    else:
+                        cv.line(frame, (x_mid, y_mid), (x_mid, y_mid), (255, 0, 0), 2)
+
+    return frame
+
+#__________________________________________________________________________________________________________________________________________________________________
+def merge_curved_lines(contours, hausdorff_threshold = 50, match_shapes_threshold = .3, centroid_threshold = 75, contour_approx_tolerance = .002, roc_tolerance = 25, distance_threshold = 200): #dt, mst
+    def fix_contour_shape(contour):
+        # Case 1: If contour is already in a valid shape, return it directly
+        if len(contour.shape) == 3 and contour.shape[1] == 1:
+            return contour
+
+        if len(contour.shape) == 2 and contour.shape[1] == 2:
+            return contour
+        
+        # Case 2: If contour is flat like (4,), reshape it to [[x1, y1], [x2, y2]]
+        if contour.shape == (4,):
+            return np.array([[[contour[0], contour[1]]], [[contour[2], contour[3]]]])
+
+        # Case 3: If it’s a single point or invalid, skip it
+        else:
+            print(f"Skipping contour due to invalid shape: {contour.shape}")
+            return None
+
+    def hausdorff_distance(c1, c2):
+        points1 = c1[:, 0, :]
+        points2 = c2[:, 0, :]
+
+        return max(directed_hausdorff(points1, points2)[0], directed_hausdorff(points2, points1)[0])
+
+    def get_centroid(contour):
+        moments = cv.moments(contour)
+
+        if moments["m00"] == 0:
+            return np.array([0, 0])
+
+        cx = int(moments["m10"] / moments["m00"])
+        cy = int(moments["m01"] / moments["m00"])
+
+        return np.array([cx, cy])
+
+    def contours_are_similar(c1, c2):
+        # Calculate Hausdorff distance
+        hausdorff_dist = hausdorff_distance(c1, c2)
+        
+        # Calculate shape similarity using cv.matchShapes
+        shape_similarity = cv.matchShapes(c1, c2, cv.CONTOURS_MATCH_I1, 0)
+        
+        # Calculate centroid distance
+        centroid_dist = np.linalg.norm(get_centroid(c1) - get_centroid(c2))
+
+        # Calculate rate of change difference
+        roc_difference = abs(np.mean(rate_of_change(c1)) - np.mean(rate_of_change(c2))) 
+
+        # Calculate distance between points
+        distance_points = calculate_distances(c1, c2)
+        
+        # Check all criteria
+        return (hausdorff_dist < hausdorff_threshold and shape_similarity < match_shapes_threshold and centroid_dist < centroid_threshold and roc_difference < roc_tolerance and distance_points < distance_threshold)
+
+    def merge_contours(c1, c2):
+        merged_points = np.vstack((c1, c2)).reshape((-1, 1, 2))
+        epsilon = contour_approx_tolerance * cv.arcLength(merged_points, True)
+        return cv.approxPolyDP(merged_points, epsilon, True)
+
+    contours = [fix_contour_shape(c) for c in contours if fix_contour_shape(c) is not None]
+    merged_contours = []
+
+    while True:
+        used = [False] * len(contours)
+        temp_merged = []
+
+        for i, c1 in enumerate(contours):
+            if used[i]:
+                continue
+
+            merged = c1
+
+            for j, c2 in enumerate(contours):
+                if i != j and not used[j] and contours_are_similar(merged, c2):
+                    merged = merge_contours(merged, c2)
+                    used[j] = True
+
+            temp_merged.append(merged)
+            used[i] = True
+
+        if contours_are_stable(merged_contours, temp_merged):
+            break
+
+        merged_contours = temp_merged
+
+    return merged_contours
+# _______________________________________________________________________________
 
 def display_fps(frame, start_time):
     fps = int(1 / (time.time() - start_time))
@@ -282,7 +454,7 @@ def main():
             print("Error: Could not read frame.")
             break
 
-        frame = cv.imread("/Users/pl1001515/Downloads/cruved.jpeg") 
+        #frame = cv.imread(r"c:\Users\Owner\Downloads\pwp_images\cruved.jpeg") 
 
         frame = resize_frame(frame)
         pre_frame = preprocess_frame(frame)
@@ -301,7 +473,11 @@ def main():
                 x1, y1, x2, y2 = merged_line
                 cv.line(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
 
-        print("Merged Lines:", len(merged_lines))
+        try:
+            print("Merged Lines:", len(merged_lines))
+
+        except:
+            print("Merged Lines: 0")
 
         cv.imshow('Merged Lines', frame)
 
@@ -317,13 +493,24 @@ def main():
         if len(contours) > 0:
             merged_contours = merge_curved_lines(contours)
 
-            for merged_contour in merged_contours: # NO merged_contours ___________________________________________________________
-                x1, y1, x2, y2 = merged_contour
-                cv.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
+            for merged_contour in merged_contours:
+                cv.drawContours(frame, [merged_contour], -1, (0, 255, 255), 2)
 
-        print("Merged Contours:", len(merged_contours))
+        try:
+            print("Merged Contours:", len(merged_contours))
+
+        except:
+            print("Merged Contours: 0")
 
         cv.imshow('Merged Curved Lines', frame)
+
+        if len(merged_lines) > 0:
+            draw_midline_lines(frame, merged_lines)
+            cv.imshow('Middle Lines', frame)
+
+        if len(merged_contours) > 0:
+            draw_midline_curves(frame, merged_contours)
+            cv.imshow('Middle Curved Lines', frame)
 
         if cv.waitKey(1) & 0xFF == ord('q'):
             break
