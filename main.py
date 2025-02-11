@@ -5,6 +5,7 @@ import os
 import time
 import sys
 from scipy.spatial.distance import cdist, directed_hausdorff
+from skimage.morphology import skeletonize
 
 def resize_frame(frame):
     height, width = frame.shape[:2]
@@ -23,6 +24,13 @@ def preprocess_frame(frame):
     frame = cv.cvtColor(frame, cv.COLOR_BGR2GRAY)
     frame = cv.bilateralFilter(frame, 9, 75, 75)
 
+    return frame
+
+def skeletonize_frame(frame):
+    frame = cv.threshold(frame, 127, 255, cv.THRESH_BINARY)[1]
+    frame = skeletonize(frame)
+    frame = (frame * 255).astype(np.uint8)  # Convert boolean to uint8
+    
     return frame
 
 def detect_lines(frame):
@@ -315,6 +323,8 @@ def draw_midline_lines(frame, lines):
     return frame
 
 def draw_midline_curves(frame, contours):
+    center_lines[] = []
+
     for i in range(len(contours)):
         for j in range(i + 1, len(contours)):
             contour1 = contours[i]
@@ -342,10 +352,17 @@ def draw_midline_curves(frame, contours):
                     else:
                         cv.line(frame, (x_mid, y_mid), (x_mid, y_mid), (255, 0, 0), 2)
 
+                    
+
     return frame
 
+def smooth_midline_curves ():
+
+
 #__________________________________________________________________________________________________________________________________________________________________
-def merge_curved_lines(contours, hausdorff_threshold = 50, match_shapes_threshold = .3, centroid_threshold = 75, contour_approx_tolerance = .002, roc_tolerance = 25, distance_threshold = 200): #dt, mst
+"""def merge_curved_lines(contours, hausdorff_threshold = 50, match_shapes_threshold = .3, centroid_threshold = 75, contour_approx_tolerance = .002, roc_tolerance = 25, distance_threshold = 200):
+"""
+def merge_curved_lines(contours, hausdorff_threshold = 50, match_shapes_threshold = .75, centroid_threshold = 75, contour_approx_tolerance = .002, roc_tolerance = 25, distance_threshold = 275):
     def fix_contour_shape(contour):
         # Case 1: If contour is already in a valid shape, return it directly
         if len(contour.shape) == 3 and contour.shape[1] == 1:
@@ -397,6 +414,8 @@ def merge_curved_lines(contours, hausdorff_threshold = 50, match_shapes_threshol
         distance_points = calculate_distances(c1, c2)
         
         # Check all criteria
+        print("\nHausdorff Distance:", hausdorff_dist < hausdorff_threshold, "\nShape Similarity:", shape_similarity < match_shapes_threshold, "\nCentroid Distance:", centroid_dist < centroid_threshold, "\nROC Difference:", roc_difference < roc_tolerance, "\nDistance Points:", distance_points < distance_threshold)
+        
         return (hausdorff_dist < hausdorff_threshold and shape_similarity < match_shapes_threshold and centroid_dist < centroid_threshold and roc_difference < roc_tolerance and distance_points < distance_threshold)
 
     def merge_contours(c1, c2):
@@ -454,11 +473,12 @@ def main():
             print("Error: Could not read frame.")
             break
 
-        #frame = cv.imread(r"c:\Users\Owner\Downloads\pwp_images\cruved.jpeg") 
+        frame = cv.imread("/Users/pl1001515/Downloads/cruved2.jpeg") 
 
         frame = resize_frame(frame)
         pre_frame = preprocess_frame(frame)
         contrast_frame = enhance_contrast(pre_frame)
+        #skele_frame = skeletonize_frame(contrast_frame)
 
         cv.imshow('Camera Feed', contrast_frame)
 
@@ -511,6 +531,8 @@ def main():
         if len(merged_contours) > 0:
             draw_midline_curves(frame, merged_contours)
             cv.imshow('Middle Curved Lines', frame)
+
+        #cv.imshow("Skeleton", skele_frame)
 
         if cv.waitKey(1) & 0xFF == ord('q'):
             break
