@@ -162,7 +162,7 @@ def merge_lines(lines, min_distance = 50, merge_angle_tolerance = 20, vertical_l
     # Perform iterative merging until lines stabilize
     prev_lines = []
 
-    while prev_lines != lines:
+    while not np.array_equal(prev_lines, lines):
         prev_lines = lines.copy()
         lines = merge_once(lines)
 
@@ -322,8 +322,11 @@ def draw_midline_lines(frame, lines):
 
     return frame
 
+def smooth_midline_curves ():
+    pass
+
 def draw_midline_curves(frame, contours):
-    center_lines[] = []
+    center_lines = []
 
     for i in range(len(contours)):
         for j in range(i + 1, len(contours)):
@@ -347,20 +350,22 @@ def draw_midline_curves(frame, contours):
                         x_mid_next = (x1_next + x2_next) // 2
                         y_mid_next = (y1_next + y2_next) // 2
 
+                        center_lines.append((x_mid, y_mid, x_mid_next, y_mid_next))
+
                         cv.line(frame, (x_mid, y_mid), (x_mid_next, y_mid_next), (255, 0, 0), 2)
 
                     else:
                         cv.line(frame, (x_mid, y_mid), (x_mid, y_mid), (255, 0, 0), 2)
 
+                        center_lines.append((x_mid, y_mid, x_mid, y_mid))
+
                     
 
     return frame
 
-def smooth_midline_curves ():
-
-
 #__________________________________________________________________________________________________________________________________________________________________
-"""def merge_curved_lines(contours, hausdorff_threshold = 50, match_shapes_threshold = .3, centroid_threshold = 75, contour_approx_tolerance = .002, roc_tolerance = 25, distance_threshold = 200):
+"""
+def merge_curved_lines(contours, hausdorff_threshold = 50, match_shapes_threshold = .3, centroid_threshold = 75, contour_approx_tolerance = .002, roc_tolerance = 25, distance_threshold = 200):
 """
 def merge_curved_lines(contours, hausdorff_threshold = 50, match_shapes_threshold = .75, centroid_threshold = 75, contour_approx_tolerance = .002, roc_tolerance = 25, distance_threshold = 275):
     def fix_contour_shape(contour):
@@ -460,6 +465,8 @@ def display_fps(frame, start_time):
 
 def main():
     cap = cv.VideoCapture(0)
+    merged_lines = []
+    merged_contours = []
 
     if not cap.isOpened():
         print("Error: Could not open camera.")
