@@ -6,6 +6,10 @@ import time
 import sys
 from scipy.spatial.distance import cdist, directed_hausdorff
 from skimage.morphology import skeletonize
+from sklearn.linear_model import RANSACRegressor, LinearRegression
+from sklearn.preprocessing import PolynomialFeatures
+from sklearn.pipeline import make_pipeline
+from scipy.interpolate import splprep, splev
 
 def resize_frame(frame):
     height, width = frame.shape[:2]
@@ -22,6 +26,8 @@ def enhance_contrast(frame):
 
 def preprocess_frame(frame):
     frame = cv.cvtColor(frame, cv.COLOR_BGR2GRAY)
+    frame = cv.GaussianBlur(frame, (5, 5), 0)
+    frame = cv.medianBlur(frame, 5)
     frame = cv.bilateralFilter(frame, 9, 75, 75)
 
     return frame
@@ -174,6 +180,9 @@ def detect_curved_lines(frame, contour_approx_tolerance = .002):
     approx_contours = []
 
     for contour in contours:
+        if len(contour) < 5:
+            continue
+
         epsilon = contour_approx_tolerance * cv.arcLength(contour, True)
         approx = cv.approxPolyDP(contour, epsilon, True)
         approx_contours.append(approx)
@@ -322,8 +331,40 @@ def draw_midline_lines(frame, lines):
 
     return frame
 
-def smooth_midline_curves ():
-    pass
+"""
+def smooth_midline_curves(frame, center_lines, degree = 3):
+    midline_points = []
+
+    for line in center_lines:
+        x1, y1, x2, y2 = line
+        midline_points.append((x1, y1))
+        midline_points.append((x2, y2))
+
+    midline_points = np.array(midline_points)
+
+    if len(midline_points) < 2:
+        return frame
+
+    # Sort points by X for a smooth curve
+    midline_points = midline_points[midline_points[:, 0].argsort()]
+
+    X = midline_points[:, 0].reshape(-1, 1)  # X-coordinates
+    y = midline_points[:, 1]  # Y-coordinates
+
+    # Polynomial Regression + RANSAC for Outlier Removal
+    model = make_pipeline(PolynomialFeatures(degree), RANSACRegressor(LinearRegression()))
+    model.fit(X, y)
+
+    # Predict curve points
+    X_fit = np.linspace(min(X), max(X), 50).reshape(-1, 1)
+    y_fit = model.predict(X_fit)
+
+    # Draw smooth curve
+    for i in range(len(X_fit) - 1):
+        cv.line(frame, (int(X_fit[i]), int(y_fit[i])), (int(X_fit[i+1]), int(y_fit[i+1])), (0, 255, 255), 2)
+
+    return frame
+"""
 
 def draw_midline_curves(frame, contours):
     center_lines = []
@@ -350,24 +391,32 @@ def draw_midline_curves(frame, contours):
                         x_mid_next = (x1_next + x2_next) // 2
                         y_mid_next = (y1_next + y2_next) // 2
 
-                        center_lines.append((x_mid, y_mid, x_mid_next, y_mid_next))
+                        center_lines.append(np.array([[[x_mid, y_mid]], [[x_mid_next, y_mid_next]]]))
 
                         cv.line(frame, (x_mid, y_mid), (x_mid_next, y_mid_next), (255, 0, 0), 2)
 
                     else:
                         cv.line(frame, (x_mid, y_mid), (x_mid, y_mid), (255, 0, 0), 2)
 
-                        center_lines.append((x_mid, y_mid, x_mid, y_mid))
+                        center_lines.append(np.array([[[x_mid, y_mid]], [[x_mid, y_mid]]]))
 
-                    
+    mid_lines = merge_curved_lines(center_lines)
+
+    for mid_line in mid_lines:
+        for i in range(len(mid_line) - 1):
+            x1, y1 = mid_line[i][0]
+            x2, y2 = mid_line[i + 1][0]
+
+            cv.line(frame, (x1, y1), (x2, y2), (255, 0, 255), 2)
 
     return frame
 
 #__________________________________________________________________________________________________________________________________________________________________
 """
 def merge_curved_lines(contours, hausdorff_threshold = 50, match_shapes_threshold = .3, centroid_threshold = 75, contour_approx_tolerance = .002, roc_tolerance = 25, distance_threshold = 200):
-"""
 def merge_curved_lines(contours, hausdorff_threshold = 50, match_shapes_threshold = .75, centroid_threshold = 75, contour_approx_tolerance = .002, roc_tolerance = 25, distance_threshold = 275):
+"""
+def merge_curved_lines(contours, hausdorff_threshold = 40, match_shapes_threshold = .6, centroid_threshold = 65, contour_approx_tolerance = .005, roc_tolerance = 30, distance_threshold = 285):
     def fix_contour_shape(contour):
         # Case 1: If contour is already in a valid shape, return it directly
         if len(contour.shape) == 3 and contour.shape[1] == 1:
@@ -403,22 +452,12 @@ def merge_curved_lines(contours, hausdorff_threshold = 50, match_shapes_threshol
         return np.array([cx, cy])
 
     def contours_are_similar(c1, c2):
-        # Calculate Hausdorff distance
         hausdorff_dist = hausdorff_distance(c1, c2)
-        
-        # Calculate shape similarity using cv.matchShapes
         shape_similarity = cv.matchShapes(c1, c2, cv.CONTOURS_MATCH_I1, 0)
-        
-        # Calculate centroid distance
         centroid_dist = np.linalg.norm(get_centroid(c1) - get_centroid(c2))
-
-        # Calculate rate of change difference
         roc_difference = abs(np.mean(rate_of_change(c1)) - np.mean(rate_of_change(c2))) 
-
-        # Calculate distance between points
         distance_points = calculate_distances(c1, c2)
         
-        # Check all criteria
         print("\nHausdorff Distance:", hausdorff_dist < hausdorff_threshold, "\nShape Similarity:", shape_similarity < match_shapes_threshold, "\nCentroid Distance:", centroid_dist < centroid_threshold, "\nROC Difference:", roc_difference < roc_tolerance, "\nDistance Points:", distance_points < distance_threshold)
         
         return (hausdorff_dist < hausdorff_threshold and shape_similarity < match_shapes_threshold and centroid_dist < centroid_threshold and roc_difference < roc_tolerance and distance_points < distance_threshold)
@@ -457,20 +496,21 @@ def merge_curved_lines(contours, hausdorff_threshold = 50, match_shapes_threshol
     return merged_contours
 # _______________________________________________________________________________
 
-def display_fps(frame, start_time):
-    fps = int(1 / (time.time() - start_time))
-    cv.putText(frame, f'FPS: {fps}', (10, 30), cv.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2, cv.LINE_AA)
-
-    return frame
+def smooth_curved_lines(contours):
+    pass
 
 def main():
-    cap = cv.VideoCapture(0)
+    vid_path = r"c:\Users\Owner\Downloads\videoplayback.webm"
+    cap = cv.VideoCapture(vid_path)
     merged_lines = []
     merged_contours = []
+    frame_skip = 10
 
     if not cap.isOpened():
         print("Error: Could not open camera.")
         return
+
+    frame_count = 0
 
     while True:
         start_time = time.time()
@@ -480,8 +520,17 @@ def main():
             print("Error: Could not read frame.")
             break
 
-        frame = cv.imread("/Users/pl1001515/Downloads/cruved2.jpeg") 
+        frame_count += 1
 
+        if frame_count % frame_skip != 0:
+            continue
+
+        frame = cv.cvtColor(frame, cv.COLOR_BGR2HSV)
+        lower_green = np.array([35, 100, 100])
+        upper_green = np.array([85, 255, 255])
+        mask = cv.inRange(frame, lower_green, upper_green)
+        mask_inv = cv.bitwise_not(mask)
+        frame = cv.bitwise_and(frame, frame, mask=mask_inv)
         frame = resize_frame(frame)
         pre_frame = preprocess_frame(frame)
         contrast_frame = enhance_contrast(pre_frame)
