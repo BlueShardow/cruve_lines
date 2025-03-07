@@ -45,10 +45,8 @@ def canny_edges(frame):
     return cv.Canny(frame, 50, 150, apertureSize = 3)
 
 def sobel_edges(frame):
-    # Convert to grayscale if it's not
     gray = cv.cvtColor(frame, cv.COLOR_BGR2GRAY) if len(frame.shape) == 3 else frame
 
-    # Compute Sobel edges
     sobel_x = cv.Sobel(gray, cv.CV_64F, 1, 0, ksize=5)
     sobel_y = cv.Sobel(gray, cv.CV_64F, 0, 1, ksize=5)
     edges = cv.magnitude(sobel_x, sobel_y)
@@ -59,11 +57,28 @@ def sobel_edges(frame):
     # Apply a binary threshold
     _, binary_edges = cv.threshold(edges, 50, 255, cv.THRESH_BINARY)
 
+    binary_edges = cv.dilate(binary_edges, None, iterations = 1) # do this multiple times, and next function
+    binary_edges = cv.erode(binary_edges, None, iterations = 1)
+
+    binary_edges = cv.medianBlur(binary_edges, 5)
+    binary_edges = cv.bilateralFilter(binary_edges, 9, 75, 75)
+
     # Find contours (connected edge regions)
     contours, _ = cv.findContours(binary_edges, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE)
     
-    output_frame = frame.copy()
-    cv.drawContours(output_frame, contours, -1, (0, 255, 0), 2)
+    # Convert binary_edges to a 3-channel image for visualization
+    binary_edges_bgr = cv.cvtColor(binary_edges, cv.COLOR_GRAY2BGR)
+
+    lines = cv.HoughLinesP(binary_edges, rho = 1, theta = np.pi / 180, threshold = 100, minLineLength = 100, maxLineGap = 85)
+    line_frame = frame.copy()
+
+    if lines is not None:
+        for line in lines:
+            x1, y1, x2, y2 = line[0]
+            cv.line(line_frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
+
+    contour_frame = frame.copy()
+    cv.drawContours(contour_frame, contours, -1, (0, 255, 0), 2)
     """
     # Draw bounding boxes on the original frame
     output_frame = frame.copy()
@@ -72,7 +87,135 @@ def sobel_edges(frame):
         cv.rectangle(output_frame, (x, y), (x + w, y + h), (0, 255, 0), 2)
     """
 
-    return output_frame
+    return contour_frame, binary_edges_bgr, line_frame, lines
+
+def line_length(line):
+    x1, y1, x2, y2 = line
+    return np.hypot((x2 - x1), (y2 - y1))
+
+def calculate_angle(line):
+    x1, y1, x2, y2 = line
+    angle = math.atan2(y2 - y1, x2 - x1) * 180 / np.pi
+
+    while angle < 0:
+        angle += 180
+
+    while angle > 180:
+        angle -= 180
+
+    return angle
+
+def is_parallel_lines(line1, line2, toward_tolerance, away_tolerance, distance_threshold):
+    x1, y1, x2, y2 = line1
+    x3, y3, x4, y4 = line2
+
+    angle1 = calculate_angle(line1)
+    angle2 = calculate_angle(line2)
+
+    angle_diff = abs(angle1 - angle2)
+
+    if angle_diff > toward_tolerance and (180 - angle_diff) > away_tolerance:
+        return False
+
+    # Horizontal or vertical check
+    is_horizontal1 = abs(y2 - y1) < abs(x2 - x1)
+    is_horizontal2 = abs(y4 - y3) < abs(x4 - x3)
+
+    # Check alignment and proximity
+    if is_horizontal1 and is_horizontal2:
+        vertical_distance = abs((y1 + y2) / 2 - (y3 + y4) / 2)
+
+        return vertical_distance < distance_threshold
+
+    elif not is_horizontal1 and not is_horizontal2:
+        horizontal_distance = abs((x1 + x2) / 2 - (x3 + x4) / 2)
+
+        return horizontal_distance < distance_threshold
+
+    return False
+
+def merge_lines(lines, min_distance = 50, merge_angle_tolerance = 20, vertical_leeway = 1.5, horizontal_leeway = 1.5):
+    def weighted_average(p1, w1, p2, w2):
+        return (p1 * w1 + p2 * w2) / (w1 + w2)
+
+    def merge_once(lines):
+        merged_lines = []
+        used = [False] * len(lines)
+
+        for i, line1 in enumerate(lines):
+            if used[i]:
+                continue
+
+            x1, y1, x2, y2 = line1
+            new_x1, new_y1, new_x2, new_y2 = x1, y1, x2, y2
+            line_weight = line_length(line1)
+
+            for j, line2 in enumerate(lines):
+                if i != j and not used[j]:
+                    x3, y3, x4, y4 = line2
+
+                    if is_parallel_lines(line1, line2, merge_angle_tolerance, merge_angle_tolerance, min_distance):
+                        is_horizontal1 = abs(y2 - y1) < abs(x2 - x1)
+                        is_horizontal2 = abs(y4 - y3) < abs(x4 - x3)
+
+                        if is_horizontal1 and is_horizontal2:
+                            vertical_distance = abs((y1 + y2) / 2 - (y3 + y4) / 2)
+                            horizontal_distance = abs((x1 + x2) / 2 - (x3 + x4) / 2)
+
+                            if vertical_distance > min_distance * horizontal_leeway or horizontal_distance > min_distance:
+                                continue
+
+                        elif not is_horizontal1 and not is_horizontal2:
+                            vertical_distance = abs((y1 + y2) / 2 - (y3 + y4) / 2)
+                            horizontal_distance = abs((x1 + x2) / 2 - (x3 + x4) / 2)
+
+                            if vertical_distance > min_distance or horizontal_distance > min_distance * vertical_leeway:
+                                continue
+
+                        # Merge lines using weighted averages
+                        l2_len = line_length(line2)
+                        new_x1 = weighted_average(new_x1, line_weight, x3, l2_len)
+                        new_y1 = weighted_average(new_y1, line_weight, y3, l2_len)
+                        new_x2 = weighted_average(new_x2, line_weight, x4, l2_len)
+                        new_y2 = weighted_average(new_y2, line_weight, y4, l2_len)
+                        line_weight += l2_len
+                        used[j] = True
+
+            merged_lines.append((int(new_x1), int(new_y1), int(new_x2), int(new_y2)))
+            used[i] = True
+
+        return merged_lines
+
+    # Convert to a flattened list of (x1, y1, x2, y2)
+    lines = [line[0] for line in lines]
+
+    # Perform iterative merging until lines stabilize
+    prev_lines = []
+
+    while not np.array_equal(prev_lines, lines):
+        prev_lines = lines.copy()
+        lines = merge_once(lines)
+
+    return lines
+
+def draw_midline_lines(frame, lines):
+    for i in range(len(lines)):
+        for j in range(i + 1, len(lines)):
+            line1 = lines[i]
+            x1, y1, x2, y2 = line1
+
+            line2 = lines[j]
+            x3, y3, x4, y4 = line2
+
+            if is_parallel_lines(line1, line2, 25, 15, 9999):
+                x_mid1 = (x1 + x3) // 2
+                y_mid1 = (y1 + y3) // 2
+                x_mid2 = (x2 + x4) // 2
+                y_mid2 = (y2 + y4) // 2
+
+                cv.line(frame, (x_mid1, y_mid1), (x_mid2, y_mid2), (255, 0, 0), 2)
+
+    return frame
 
 """
 def detect_lines(frame):
@@ -443,10 +586,12 @@ def main():
         contrast_frame = enhance_contrast(frame)
         preprocessed_frame = process_frame(contrast_frame)
 
+        display_fps(frame, start_time)
+
         roi_points = [
-            (0, height - 10),  # bottom left
-            (width - 175, height - 15),  # bottom right
-            (width - 215, 250),  # top right
+            (0, height - 15),  # bottom left
+            (width - 175, height - 20),  # bottom right
+            (width - 235, 250),  # top right
             (150, 250)  # top left
         ]
 
@@ -461,8 +606,25 @@ def main():
         warped_frame = get_perspective_transform(preprocessed_frame, roi_points, width, height)
         frame = draw_arrow(frame, (25, 100), (25, 5), (0, 255, 0), 2)
 
-        #edges_frame = canny_edges(warped_frame)
-        edges_frame = sobel_edges(warped_frame)
+        contour_frame, binary_frame, line_frame, lines = sobel_edges(warped_frame)
+
+        if lines is not None:
+            merged_lines = merge_lines(lines)
+
+            for merged_line in merged_lines:
+                x1, y1, x2, y2 = merged_line
+                cv.line(warped_frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
+                
+            print("Merged Lines:", len(merged_lines))
+
+        merge_line_frame = warped_frame.copy()
+
+        if lines is not None:
+            for line in lines:
+                x1, y1, x2, y2 = line[0]
+                cv.line(merge_line_frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
+
+            print("Lines:", len(lines))
 
         """
         line_frame, lines = detect_lines(warped_frame)
@@ -519,7 +681,10 @@ def main():
         cv.imshow("Preprocessed Frame", preprocessed_frame)
         cv.imshow("ROI Frame", roi_frame)
         cv.imshow("Warped Frame", warped_frame)
-        cv.imshow("Edges Frame", edges_frame)
+        cv.imshow("Binary Frame", binary_frame)
+        cv.imshow("Contour Frame", contour_frame)
+        cv.imshow("Line Frame", line_frame)
+        cv.imshow("Merged Lines", merge_line_frame)
 
         if cv.waitKey(1) & 0xFF == ord('q'):
             break
