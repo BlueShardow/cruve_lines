@@ -69,7 +69,7 @@ def sobel_edges(frame):
     # Convert binary_edges to a 3-channel image for visualization
     binary_edges_bgr = cv.cvtColor(binary_edges, cv.COLOR_GRAY2BGR)
 
-    lines = cv.HoughLinesP(binary_edges, rho = 1, theta = np.pi / 180, threshold = 100, minLineLength = 100, maxLineGap = 85)
+    lines = cv.HoughLinesP(binary_edges, rho = 1, theta = np.pi / 180, threshold = 100, minLineLength = 100, maxLineGap = 150)
     line_frame = frame.copy()
 
     if lines is not None:
@@ -134,9 +134,73 @@ def is_parallel_lines(line1, line2, toward_tolerance, away_tolerance, distance_t
 
     return False
 
-def merge_lines(lines, min_distance = 50, merge_angle_tolerance = 20, vertical_leeway = 1.5, horizontal_leeway = 1.5):
+def merge_lines(lines, width, height = 360, min_distance = 75, merge_angle_tolerance = 20, vertical_leeway = 1.5, horizontal_leeway = 1.1):
     def weighted_average(p1, w1, p2, w2):
         return (p1 * w1 + p2 * w2) / (w1 + w2)
+    
+    def extend_line(x1, y1, x2, y2, height):
+        if x1 <= x2 + 25 or x1 >= x2 - 25:
+            return x1, 0, x2, height
+        
+        else:
+            slope = (y2 - y1) / (x2 - x1)
+            intercept = y1 - slope * x1
+            new_x1 = (0 - intercept) / slope
+            new_x2 = (height - intercept) / slope
+
+            return int(new_x1), 0, int(new_x2), height
+
+    def sort_line_endpoints(line):
+        x1, y1, x2, y2 = line
+
+        if x1 > x2:
+            return x2, y2, x1, y1
+        
+        else:
+            return x1, y1, x2, y2
+        
+    def adjust_towards_center(x1, y1, x2, y2, width):
+        center_x = width // 2
+        adjustment_factor = 0.1  # Adjust this factor to control how much the lines lean towards the center
+        slope = (y2 - y1) / (x2 - x1)
+
+        if slope == 0:
+            return x1, y1, x2, y2
+        
+        elif slope > 0 and (x1 < center_x or x2 < center_x):
+            return x1, y1, x2, y2
+        
+        elif slope > 0 and (x1 > center_x or x2 > center_x):
+            adjustment_factor = slope / 100
+
+            x1 = int(x1 - adjustment_factor * (x1 - center_x))
+            x2 = int(x2 - adjustment_factor * (x2 - center_x))
+
+            return x1, y1, x2, y2
+
+
+        elif slope < 0 and (x1 > center_x or x2 > center_x):
+            return x1, y1, x2, y2
+        
+        elif slope < 0 and (x1 < center_x or x2 < center_x):
+            adjustment_factor = slope / 100
+
+            x1 = int(x1 - adjustment_factor * (x1 - center_x))
+            x2 = int(x2 - adjustment_factor * (x2 - center_x))
+
+            return x1, y1, x2, y2
+
+        else:
+            return x1, y1, x2, y2
+        
+    def fix_slope(line, width):
+        x1, y1, x2, y2 = line
+
+        if x1 < width // 2 and x2 < width // 2:
+            return x2, y1, x1, y2
+        
+        else:
+            return x1, y1, x2, y2
 
     def merge_once(lines):
         merged_lines = []
@@ -146,13 +210,13 @@ def merge_lines(lines, min_distance = 50, merge_angle_tolerance = 20, vertical_l
             if used[i]:
                 continue
 
-            x1, y1, x2, y2 = line1
+            x1, y1, x2, y2 = sort_line_endpoints(line1)
             new_x1, new_y1, new_x2, new_y2 = x1, y1, x2, y2
             line_weight = line_length(line1)
 
             for j, line2 in enumerate(lines):
                 if i != j and not used[j]:
-                    x3, y3, x4, y4 = line2
+                    x3, y3, x4, y4 = sort_line_endpoints(line2)
 
                     if is_parallel_lines(line1, line2, merge_angle_tolerance, merge_angle_tolerance, min_distance):
                         is_horizontal1 = abs(y2 - y1) < abs(x2 - x1)
@@ -174,16 +238,24 @@ def merge_lines(lines, min_distance = 50, merge_angle_tolerance = 20, vertical_l
 
                         # Merge lines using weighted averages
                         l2_len = line_length(line2)
+
                         new_x1 = weighted_average(new_x1, line_weight, x3, l2_len)
                         new_y1 = weighted_average(new_y1, line_weight, y3, l2_len)
                         new_x2 = weighted_average(new_x2, line_weight, x4, l2_len)
                         new_y2 = weighted_average(new_y2, line_weight, y4, l2_len)
+                        
                         line_weight += l2_len
                         used[j] = True
 
+            new_x1, new_y1, new_x2, new_y2 = extend_line(new_x1, new_y1, new_x2, new_y2, height)
+            new_x1, new_y1, new_x2, new_y2 = fix_slope((new_x1, new_y1, new_x2, new_y2), width)
+            #new_x1, new_y1, new_x2, new_y2 = adjust_towards_center(new_x1, new_y1, new_x2, new_y2, width)
+            
             merged_lines.append((int(new_x1), int(new_y1), int(new_x2), int(new_y2)))
+            print("merge lines in function", merged_lines)
             used[i] = True
 
+        print("merged lines in 2", merged_lines)
         return merged_lines
 
     # Convert to a flattened list of (x1, y1, x2, y2)
@@ -198,26 +270,67 @@ def merge_lines(lines, min_distance = 50, merge_angle_tolerance = 20, vertical_l
 
     return lines
 
-def draw_midline_lines(frame, lines):
-    for i in range(len(lines)):
-        for j in range(i + 1, len(lines)):
-            line1 = lines[i]
-            x1, y1, x2, y2 = line1
+def draw_midline_lines(warped_frame, blended_lines):
+    x1, y1, x2, y2, x3, y3, x4, y4 = 0, 0, 0, 0, 0, 0, 0, 0
 
-            line2 = lines[j]
-            x3, y3, x4, y4 = line2
+    if not isinstance(blended_lines, (list, tuple, int)):
+        print(f"Error: blended_lines should be a list or tuple or int, but got {type(blended_lines)}")
+        return
+    
+    for i in range(len(blended_lines)):
+        for j in range(i + 1, len(blended_lines)):
+            line1 = blended_lines[i]
+            line2 = blended_lines[j]
 
-            if is_parallel_lines(line1, line2, 25, 15, 9999):
-                x_mid1 = (x1 + x3) // 2
-                y_mid1 = (y1 + y3) // 2
-                x_mid2 = (x2 + x4) // 2
-                y_mid2 = (y2 + y4) // 2
+            if isinstance(line1, (tuple, list)) and isinstance(line2, (tuple, list)):
+                x1, y1, x2, y2 = line1
+                x3, y3, x4, y4 = line2
 
-                cv.line(frame, (x_mid1, y_mid1), (x_mid2, y_mid2), (255, 0, 0), 2)
+                if is_parallel_lines(line1, line2, 25, 15, 9999):
+                    x_mid1 = (x1 + x3) // 2
+                    y_mid1 = (y1 + y3) // 2
+                    x_mid2 = (x2 + x4) // 2
+                    y_mid2 = (y2 + y4) // 2
 
-    return frame
+                    cv.line(warped_frame, (x_mid1, y_mid1), (x_mid2, y_mid2), (255, 0, 0), 2)
 
-"""
+            elif isinstance(line1, int) and isinstance(line2, int):
+                print("kmn")
+                x1, y1, x2, y2, x3, y3, x4, y4 = blend_lines[i], blend_lines[j], blend_lines[j+1], blend_lines[j+2], blend_lines[j+3], blend_lines[j+4], blend_lines[j+5], blend_lines[j+6]
+
+                print(x1)
+
+                if is_parallel_lines((x1, y1, x2, y2), (x3, y3, x4, y4), 25, 15, 9999):
+                    x_mid1 = (x1 + x3) // 2
+                    y_mid1 = (y1 + y3) // 2
+                    x_mid2 = (x2 + x4) // 2
+                    y_mid2 = (y2 + y4) // 2
+
+                    cv.line(warped_frame, (x_mid1, y_mid1), (x_mid2, y_mid2), (255, 0, 0), 2)
+
+            else:
+                print(f"Skipping invalid line format: {line1} (Type: {type(line1)}), {line2} (Type: {type(line2)})")
+
+    return warped_frame
+
+def blend_lines(old_lines, new_lines, alpha=0.35):
+    blended_lines = []
+
+    for old_line, new_line in zip(old_lines, new_lines):
+        x1_old, y1_old, x2_old, y2_old = old_line
+        x1_new, y1_new, x2_new, y2_new = new_line
+
+        x1_blend = int(alpha * x1_old + (1 - alpha) * x1_new)
+        y1_blend = int(alpha * y1_old + (1 - alpha) * y1_new)
+        x2_blend = int(alpha * x2_old + (1 - alpha) * x2_new)
+        y2_blend = int(alpha * y2_old + (1 - alpha) * y2_new)
+
+        blended_lines.append((x1_blend, y1_blend, x2_blend, y2_blend))
+        print("blend lines in function", blend_lines)
+
+    return blended_lines
+
+"""cant we 
 def detect_lines(frame):
     edges = cv.Canny(frame, 50, 150, apertureSize = 3)
     lines = cv.HoughLinesP(edges, rho = 1, theta = np.pi / 180, threshold = 100, minLineLength = 50, maxLineGap = 85)
@@ -557,11 +670,12 @@ def display_fps(frame, start_time):
     return frame
 
 def main():
-    vid_path = "/Users/pl1001515/Downloads/Sunday Drive Along Country Roads During Spring, USA ｜ Driving Sounds for Sleep and Study.mp4" #vid path ________________________________________________________________________
+    vid_path = r"c:\Users\Owner\Downloads\pwp_data\videoplayback.webm" # vid path ________________________________________________________________________
     cap = cv.VideoCapture(vid_path)
 
     merged_lines = []
     merged_contours = []
+    last_merged_lines = []
     frame_skip = 5
 
     if not cap.isOpened():
@@ -582,18 +696,30 @@ def main():
         if frame_count % frame_skip != 0:
             continue
 
+        #frame = cv.imread(r"c:\Users\Owner\Downloads\pwp_data\testroad.jpg")
         frame, height, width, ratio = resize_frame(frame)
         contrast_frame = enhance_contrast(frame)
         preprocessed_frame = process_frame(contrast_frame)
 
         display_fps(frame, start_time)
 
+        #"""
         roi_points = [
             (0, height - 15),  # bottom left
             (width - 175, height - 20),  # bottom right
             (width - 235, 250),  # top right
             (150, 250)  # top left
         ]
+        #"""
+
+        """
+        roi_points = [
+            (10, height),  # bottom left
+            (width - 35, height),  # bottom right
+            (width - 125, 250),  # top right
+            (175, 250)  # top left
+        ]
+        """
 
         mask = np.zeros_like(preprocessed_frame)
         roi_corners = np.array(roi_points, dtype=np.int32)
@@ -608,23 +734,50 @@ def main():
 
         contour_frame, binary_frame, line_frame, lines = sobel_edges(warped_frame)
 
-        if lines is not None:
-            merged_lines = merge_lines(lines)
+        warped_width = warped_frame.shape[1]
+        
+        last_merged_lines = []
 
-            for merged_line in merged_lines:
-                x1, y1, x2, y2 = merged_line
+        if lines is not None:
+            print(f"Detected {len(lines)} lines: {lines}")
+            new_merged_lines = merge_lines(lines, warped_width)
+
+            if last_merged_lines:
+                #blended_lines = blend_lines(last_merged_lines, new_merged_lines, alpha=0.35)
+                blended_lines = new_merged_lines
+                print("Blended Lines aaa:", blended_lines)
+
+
+            else:
+                blended_lines = new_merged_lines
+                print("No last merged lines, using new merged lines directly.")
+
+            last_merged_lines = blended_lines
+
+            for blended_lines in blended_lines:
+                x1, y1, x2, y2 = blended_lines
                 cv.line(warped_frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
                 
-            print("Merged Lines:", len(merged_lines))
+            print("Blended Lines:", len(blended_lines))
+
+        else:
+            new_merged_lines = []
 
         merge_line_frame = warped_frame.copy()
 
         if lines is not None:
             for line in lines:
                 x1, y1, x2, y2 = line[0]
-                cv.line(merge_line_frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
+                cv.line(line_frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
 
             print("Lines:", len(lines))
+
+        if blended_lines is not None:
+            print("Blended Lines aaaa:", len(blended_lines))
+            draw_midline_lines(warped_frame, blended_lines)
+            #print("after midlines-----------------------------------------------------" [blended_lines])
+
+        print("Blended Lines:", blended_lines)
 
         """
         line_frame, lines = detect_lines(warped_frame)
