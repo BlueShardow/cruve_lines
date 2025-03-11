@@ -156,6 +156,12 @@ def calculate_angle(line):
 
     return angle
 
+def calculate_distance(x1, y1, x2, y2, x3, y3, x4, y4):
+    num = abs((y2 - y1) * x3 - (x2 - x1) * y3 + x2 * y1 - y2 * x1)
+    den = np.hypot((y2 - y1), (x2 - x1))
+
+    return num / den
+
 def is_parallel_lines(line1, line2, toward_tolerance, away_tolerance, distance_threshold):
     x1, y1, x2, y2 = line1
     x3, y3, x4, y4 = line2
@@ -321,7 +327,9 @@ def merge_lines(lines, width, height = 360, min_distance = 75, merge_angle_toler
 
     return lines
 
-def draw_midline_lines(warped_frame, blended_lines):
+def draw_midline_lines(warped_frame, blended_lines, width):
+    midlines = []
+
     if not isinstance(blended_lines, list):
         print(f"Error: blended_lines should be a list, but got {type(blended_lines)}")
         return
@@ -341,24 +349,81 @@ def draw_midline_lines(warped_frame, blended_lines):
                     x_mid2 = (x2 + x4) // 2
                     y_mid2 = (y2 + y4) // 2
 
-                    cv.line(warped_frame, (x_mid1, y_mid1), (x_mid2, y_mid2), (255, 0, 0), 2)
+                    midlines.append((x_mid1, y_mid1, x_mid2, y_mid2))
 
             elif isinstance(line1, int) and isinstance(line2, int):
                 if line1 + 3 < len(blended_lines) and line2 + 3 < len(blended_lines):
                     x1, y1, x2, y2 = blended_lines[line1:line1 + 4]
                     x3, y3, x4, y4 = blended_lines[line2:line2 + 4]
 
-                    if is_parallel_lines((x1, y1, x2, y2), (x3, y3, x4, y4), 25, 15, 9999):
+                    if is_parallel_lines((x1, y1, x2, y2), (x3, y3, x4, y4), 25, 15, 1):
                         x_mid1 = (x1 + x3) // 2
                         y_mid1 = (y1 + y3) // 2
                         x_mid2 = (x2 + x4) // 2
                         y_mid2 = (y2 + y4) // 2
 
-                        cv.line(warped_frame, (x_mid1, y_mid1), (x_mid2, y_mid2), (255, 0, 0), 2)
+                        midlines.append((x_mid1, y_mid1, x_mid2, y_mid2))
+          
                 else:
                     print(f"Skipping invalid line indices: {line1}, {line2}")
             else:
                 print(f"Skipping invalid line format: {line1} (Type: {type(line1)}), {line2} (Type: {type(line2)})")
+    
+    if len(midlines) > 0:
+        #mid_lines_tuple = tuple(midlines)
+        mid_lines_tuple = midlines
+        #merge_mid_lines_tuple = merge_lines(mid_lines_tuple, width)
+        merge_mid_lines_tuple = mid_lines_tuple
+
+        filtered_lines = []
+
+        for merge_mid_line_tuple1 in merge_mid_lines_tuple:
+            for merge_mid_line_tuple2 in merge_mid_lines_tuple:
+                x1, y1, x2, y2 = merge_mid_line_tuple1
+                x3, y3, x4, y4 = merge_mid_line_tuple2
+
+                if(x1 == x3 and y1 == y3 and x2 == x4 and y2 == y4):
+                    filtered_lines.append((x1, y1, x2, y2))
+
+                elif(calculate_distance(x1, y1, x2, y2, x3, y3, x4, y4)) < 50:
+                    print("\n\n\n", calculate_distance(x1, y1, x2, y2, x3, y3, x4, y4), "\n\n\n")
+                    x1 = (x1 + x3) // 2
+                    y1 = (y1 + y3) // 2
+                    x2 = (x2 + x4) // 2
+                    y2 = (y2 + y4) // 2
+
+                    filtered_lines.append((x1, y1, x2, y2))
+                    print("yippee")
+
+                else:
+                    filtered_lines.append((x1, y1, x2, y2))
+                    filtered_lines.append((x3, y3, x4, y4))
+
+        for filtered_line in filtered_lines:
+            for filtered_line in filtered_lines:
+                x1, y1, x2, y2 = merge_mid_line_tuple1
+                x3, y3, x4, y4 = merge_mid_line_tuple2
+
+                if(x1 == x3 and y1 == y3 and x2 == x4 and y2 == y4):
+                    pass
+
+                elif(calculate_distance(x1, y1, x2, y2, x3, y3, x4, y4)) < 50: # FIX THIS----------------------------------------------------------------
+                    print("\n\n\n", calculate_distance(x1, y1, x2, y2, x3, y3, x4, y4), "\n\n\n")
+                    x1 = (x1 + x3) // 2
+                    y1 = (y1 + y3) // 2
+                    x2 = (x2 + x4) // 2
+                    y2 = (y2 + y4) // 2
+
+                    filtered_lines.append((x1, y1, x2, y2))
+                    print("yippee2")
+
+                else:
+                    filtered_lines.append((x1, y1, x2, y2))
+                    filtered_lines.append((x3, y3, x4, y4))
+                
+        for filtered_line in filtered_lines:
+            x1, y1, x2, y2 = filtered_line        
+            cv.line(warped_frame, (x1, y1), (x2, y2), (255, 0, 0), 2)
 
     return warped_frame
 
@@ -705,14 +770,14 @@ def display_fps(frame, start_time):
     return frame
 
 def main():
-    vid_path = r"c:\Users\Owner\Downloads\pwp_data\videoplayback.webm" # vid path ________________________________________________________________________
+    vid_path = "/Users/pl1001515/Downloads/Sunday Drive Along Country Roads During Spring, USA ｜ Driving Sounds for Sleep and Study.mp4" # vid path ________________________________________________________________________
     cap = cv.VideoCapture(vid_path)
 
     merged_lines = []
     merged_contours = []
     last_merged_lines = []
     blended_lines = []
-    frame_skip = 1
+    frame_skip = 2
 
     if not cap.isOpened():
         print("Error: Could not open video file.")
@@ -782,7 +847,7 @@ def main():
             print(f"Detected {len(lines)} lines: {lines}")
             new_merged_lines = merge_lines(lines, warped_width)
 
-            draw_midline_lines(merge_line_frame, new_merged_lines) #----------------------------------------------------
+            draw_midline_lines(merge_line_frame, new_merged_lines, warped_width) #----------------------------------------------------
 
             for new_merged_line in new_merged_lines:
                 x1, y1, x2, y2 = new_merged_line
