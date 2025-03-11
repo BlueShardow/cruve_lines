@@ -13,7 +13,50 @@ def resize_frame(frame):
     return cv.resize(frame, (new_width, new_height)), new_height, new_width, aspect_ratio
 
 def enhance_contrast(frame):
-    return cv.normalize(frame, None, 0, 255, cv.NORM_MINMAX)
+    # Convert the image to LAB color space
+    lab = cv.cvtColor(frame, cv.COLOR_BGR2LAB)
+    
+    # Split the LAB image into different channels
+    l_channel, a, b = cv.split(lab)
+    
+    # Apply CLAHE to the L-channel
+    clahe = cv.createCLAHE(clipLimit = 3, tileGridSize = (2, 2))
+    cl = clahe.apply(l_channel)
+    
+    # Merge the CLAHE enhanced L-channel with the a and b channel
+    limg = cv.merge((cl, a, b))
+    
+    # Convert the LAB image back to BGR format
+    enhanced_img = cv.cvtColor(limg, cv.COLOR_LAB2BGR)
+    
+    return enhanced_img
+    
+def enhance_color_contrast(frame):
+    hsv = cv.cvtColor(frame, cv.COLOR_BGR2HSV)
+
+    # Define HSV range for white color
+    lower_white = np.array([0, 0, 200])
+    upper_white = np.array([180, 25, 255])
+    mask_white = cv.inRange(hsv, lower_white, upper_white)
+
+    # Define HSV range for yellow color
+    lower_yellow = np.array([15, 100, 100])
+    upper_yellow = np.array([75, 255, 255])
+    mask_yellow = cv.inRange(hsv, lower_yellow, upper_yellow)
+
+    # Combine the masks
+    mask = cv.bitwise_or(mask_white, mask_yellow)
+
+    # Apply the mask to the original frame
+    result = cv.bitwise_and(frame, frame, mask = mask)
+
+    # Enhance the contrast of the masked regions
+    result = enhance_contrast(result)
+
+    # Combine the enhanced regions with the original frame
+    enhanced_frame = cv.addWeighted(frame, .3, result, .7, 0)
+
+    return enhanced_frame
 
 def process_frame(frame):
     frame = cv.cvtColor(frame, cv.COLOR_BGR2GRAY)
@@ -72,8 +115,16 @@ def sobel_edges(frame):
     lines = cv.HoughLinesP(binary_edges, rho = 1, theta = np.pi / 180, threshold = 100, minLineLength = 100, maxLineGap = 150)
     line_frame = frame.copy()
 
+    filtered_lines = []
+
     if lines is not None:
         for line in lines:
+            x1, y1, x2, y2 = line[0]
+
+            if calculate_angle(line[0]) > 55 and calculate_angle(line[0]) < 125:
+                filtered_lines.append(line)
+
+        for line in filtered_lines:
             x1, y1, x2, y2 = line[0]
             cv.line(line_frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
 
@@ -87,7 +138,7 @@ def sobel_edges(frame):
         cv.rectangle(output_frame, (x, y), (x + w, y + h), (0, 255, 0), 2)
     """
 
-    return contour_frame, binary_edges_bgr, line_frame, lines
+    return contour_frame, binary_edges_bgr, line_frame, filtered_lines
 
 def line_length(line):
     x1, y1, x2, y2 = line
@@ -271,10 +322,8 @@ def merge_lines(lines, width, height = 360, min_distance = 75, merge_angle_toler
     return lines
 
 def draw_midline_lines(warped_frame, blended_lines):
-    x1, y1, x2, y2, x3, y3, x4, y4 = 0, 0, 0, 0, 0, 0, 0, 0
-
-    if not isinstance(blended_lines, (list, tuple, int)):
-        print(f"Error: blended_lines should be a list or tuple or int, but got {type(blended_lines)}")
+    if not isinstance(blended_lines, list):
+        print(f"Error: blended_lines should be a list, but got {type(blended_lines)}")
         return
     
     for i in range(len(blended_lines)):
@@ -282,7 +331,7 @@ def draw_midline_lines(warped_frame, blended_lines):
             line1 = blended_lines[i]
             line2 = blended_lines[j]
 
-            if isinstance(line1, (tuple, list)) and isinstance(line2, (tuple, list)):
+            if isinstance(line1, tuple) and isinstance(line2, tuple):
                 x1, y1, x2, y2 = line1
                 x3, y3, x4, y4 = line2
 
@@ -295,40 +344,26 @@ def draw_midline_lines(warped_frame, blended_lines):
                     cv.line(warped_frame, (x_mid1, y_mid1), (x_mid2, y_mid2), (255, 0, 0), 2)
 
             elif isinstance(line1, int) and isinstance(line2, int):
-                print("kmn")
-                x1, y1, x2, y2, x3, y3, x4, y4 = blend_lines[i], blend_lines[j], blend_lines[j+1], blend_lines[j+2], blend_lines[j+3], blend_lines[j+4], blend_lines[j+5], blend_lines[j+6]
+                if line1 + 3 < len(blended_lines) and line2 + 3 < len(blended_lines):
+                    x1, y1, x2, y2 = blended_lines[line1:line1 + 4]
+                    x3, y3, x4, y4 = blended_lines[line2:line2 + 4]
 
-                print(x1)
+                    if is_parallel_lines((x1, y1, x2, y2), (x3, y3, x4, y4), 25, 15, 9999):
+                        x_mid1 = (x1 + x3) // 2
+                        y_mid1 = (y1 + y3) // 2
+                        x_mid2 = (x2 + x4) // 2
+                        y_mid2 = (y2 + y4) // 2
 
-                if is_parallel_lines((x1, y1, x2, y2), (x3, y3, x4, y4), 25, 15, 9999):
-                    x_mid1 = (x1 + x3) // 2
-                    y_mid1 = (y1 + y3) // 2
-                    x_mid2 = (x2 + x4) // 2
-                    y_mid2 = (y2 + y4) // 2
-
-                    cv.line(warped_frame, (x_mid1, y_mid1), (x_mid2, y_mid2), (255, 0, 0), 2)
-
+                        cv.line(warped_frame, (x_mid1, y_mid1), (x_mid2, y_mid2), (255, 0, 0), 2)
+                else:
+                    print(f"Skipping invalid line indices: {line1}, {line2}")
             else:
                 print(f"Skipping invalid line format: {line1} (Type: {type(line1)}), {line2} (Type: {type(line2)})")
 
     return warped_frame
 
 def blend_lines(old_lines, new_lines, alpha=0.35):
-    blended_lines = []
-
-    for old_line, new_line in zip(old_lines, new_lines):
-        x1_old, y1_old, x2_old, y2_old = old_line
-        x1_new, y1_new, x2_new, y2_new = new_line
-
-        x1_blend = int(alpha * x1_old + (1 - alpha) * x1_new)
-        y1_blend = int(alpha * y1_old + (1 - alpha) * y1_new)
-        x2_blend = int(alpha * x2_old + (1 - alpha) * x2_new)
-        y2_blend = int(alpha * y2_old + (1 - alpha) * y2_new)
-
-        blended_lines.append((x1_blend, y1_blend, x2_blend, y2_blend))
-        print("blend lines in function", blend_lines)
-
-    return blended_lines
+    pass
 
 """cant we 
 def detect_lines(frame):
@@ -676,7 +711,8 @@ def main():
     merged_lines = []
     merged_contours = []
     last_merged_lines = []
-    frame_skip = 5
+    blended_lines = []
+    frame_skip = 1
 
     if not cap.isOpened():
         print("Error: Could not open video file.")
@@ -693,13 +729,18 @@ def main():
             break
 
         frame_count += 1
+
+        if frame_count < 120:
+            continue
+
         if frame_count % frame_skip != 0:
             continue
 
         #frame = cv.imread(r"c:\Users\Owner\Downloads\pwp_data\testroad.jpg")
         frame, height, width, ratio = resize_frame(frame)
-        contrast_frame = enhance_contrast(frame)
-        preprocessed_frame = process_frame(contrast_frame)
+        #contrast_frame = enhance_contrast(frame)
+        #enhance_color_frame = enhance_color_contrast(contrast_frame)
+        preprocessed_frame = process_frame(frame)
 
         display_fps(frame, start_time)
 
@@ -735,18 +776,22 @@ def main():
         contour_frame, binary_frame, line_frame, lines = sobel_edges(warped_frame)
 
         warped_width = warped_frame.shape[1]
-        
-        last_merged_lines = []
+        merge_line_frame = warped_frame.copy()
 
         if lines is not None:
             print(f"Detected {len(lines)} lines: {lines}")
             new_merged_lines = merge_lines(lines, warped_width)
 
-            if last_merged_lines:
-                #blended_lines = blend_lines(last_merged_lines, new_merged_lines, alpha=0.35)
-                blended_lines = new_merged_lines
-                print("Blended Lines aaa:", blended_lines)
+            draw_midline_lines(merge_line_frame, new_merged_lines) #----------------------------------------------------
 
+            for new_merged_line in new_merged_lines:
+                x1, y1, x2, y2 = new_merged_line
+                cv.line(merge_line_frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
+
+            if last_merged_lines:
+                blended_lines = blend_lines(last_merged_lines, new_merged_lines, alpha=0.35)
+                #blended_lines = new_merged_lines
+                print("Blended Lines aaa:", blended_lines)
 
             else:
                 blended_lines = new_merged_lines
@@ -754,16 +799,15 @@ def main():
 
             last_merged_lines = blended_lines
 
-            for blended_lines in blended_lines:
-                x1, y1, x2, y2 = blended_lines
-                cv.line(warped_frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
+            if blended_lines is not None:
+                for blended_lines in blended_lines:
+                    x1, y1, x2, y2 = blended_lines
+                    cv.line(warped_frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
                 
-            print("Blended Lines:", len(blended_lines))
+            #print("Blended Lines:", len(blended_lines))
 
         else:
             new_merged_lines = []
-
-        merge_line_frame = warped_frame.copy()
 
         if lines is not None:
             for line in lines:
@@ -772,12 +816,14 @@ def main():
 
             print("Lines:", len(lines))
 
+        """
         if blended_lines is not None:
-            print("Blended Lines aaaa:", len(blended_lines))
-            draw_midline_lines(warped_frame, blended_lines)
+            #print("Blended Lines aaaa:", len(blended_lines))
+            draw_midline_lines(merge_line_frame, blended_lines)
             #print("after midlines-----------------------------------------------------" [blended_lines])
 
         print("Blended Lines:", blended_lines)
+        """
 
         """
         line_frame, lines = detect_lines(warped_frame)
@@ -838,6 +884,8 @@ def main():
         cv.imshow("Contour Frame", contour_frame)
         cv.imshow("Line Frame", line_frame)
         cv.imshow("Merged Lines", merge_line_frame)
+        #cv.imshow("Contrast Frame", contrast_frame)
+        #cv.imshow("Enhanced Color Frame", enhance_color_frame)
 
         if cv.waitKey(1) & 0xFF == ord('q'):
             break
