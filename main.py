@@ -3,6 +3,7 @@ import cv2 as cv
 import math
 import time
 from scipy.spatial.distance import directed_hausdorff, cdist
+from collections import deque
 
 def resize_frame(frame):
     height, width = frame.shape[:2]
@@ -328,8 +329,6 @@ def merge_lines(lines, width, height = 360, min_distance = 75, merge_angle_toler
     return lines
 
 def draw_midline_lines(warped_frame, blended_lines, width):
-    midlines = []
-
     if not isinstance(blended_lines, list):
         print(f"Error: blended_lines should be a list, but got {type(blended_lines)}")
         return
@@ -349,86 +348,78 @@ def draw_midline_lines(warped_frame, blended_lines, width):
                     x_mid2 = (x2 + x4) // 2
                     y_mid2 = (y2 + y4) // 2
 
-                    midlines.append((x_mid1, y_mid1, x_mid2, y_mid2))
+                    cv.line(warped_frame, (x_mid1, y_mid1), (x_mid2, y_mid2), (255, 0, 0), 2)
 
             elif isinstance(line1, int) and isinstance(line2, int):
                 if line1 + 3 < len(blended_lines) and line2 + 3 < len(blended_lines):
                     x1, y1, x2, y2 = blended_lines[line1:line1 + 4]
                     x3, y3, x4, y4 = blended_lines[line2:line2 + 4]
 
-                    if is_parallel_lines((x1, y1, x2, y2), (x3, y3, x4, y4), 25, 15, 1):
+                    if is_parallel_lines((x1, y1, x2, y2), (x3, y3, x4, y4), 25, 15, 9999):
                         x_mid1 = (x1 + x3) // 2
                         y_mid1 = (y1 + y3) // 2
                         x_mid2 = (x2 + x4) // 2
                         y_mid2 = (y2 + y4) // 2
 
-                        midlines.append((x_mid1, y_mid1, x_mid2, y_mid2))
-          
+                        cv.line(warped_frame, (x_mid1, y_mid1), (x_mid2, y_mid2), (255, 0, 0), 2)
+                    
                 else:
                     print(f"Skipping invalid line indices: {line1}, {line2}")
             else:
                 print(f"Skipping invalid line format: {line1} (Type: {type(line1)}), {line2} (Type: {type(line2)})")
-    
-    if len(midlines) > 0:
-        #mid_lines_tuple = tuple(midlines)
-        mid_lines_tuple = midlines
-        #merge_mid_lines_tuple = merge_lines(mid_lines_tuple, width)
-        merge_mid_lines_tuple = mid_lines_tuple
-
-        filtered_lines = []
-
-        for merge_mid_line_tuple1 in merge_mid_lines_tuple:
-            for merge_mid_line_tuple2 in merge_mid_lines_tuple:
-                x1, y1, x2, y2 = merge_mid_line_tuple1
-                x3, y3, x4, y4 = merge_mid_line_tuple2
-
-                if(x1 == x3 and y1 == y3 and x2 == x4 and y2 == y4):
-                    filtered_lines.append((x1, y1, x2, y2))
-
-                elif(calculate_distance(x1, y1, x2, y2, x3, y3, x4, y4)) < 50:
-                    print("\n\n\n", calculate_distance(x1, y1, x2, y2, x3, y3, x4, y4), "\n\n\n")
-                    x1 = (x1 + x3) // 2
-                    y1 = (y1 + y3) // 2
-                    x2 = (x2 + x4) // 2
-                    y2 = (y2 + y4) // 2
-
-                    filtered_lines.append((x1, y1, x2, y2))
-                    print("yippee")
-
-                else:
-                    filtered_lines.append((x1, y1, x2, y2))
-                    filtered_lines.append((x3, y3, x4, y4))
-
-        for filtered_line in filtered_lines:
-            for filtered_line in filtered_lines:
-                x1, y1, x2, y2 = merge_mid_line_tuple1
-                x3, y3, x4, y4 = merge_mid_line_tuple2
-
-                if(x1 == x3 and y1 == y3 and x2 == x4 and y2 == y4):
-                    pass
-
-                elif(calculate_distance(x1, y1, x2, y2, x3, y3, x4, y4)) < 50: # FIX THIS----------------------------------------------------------------
-                    print("\n\n\n", calculate_distance(x1, y1, x2, y2, x3, y3, x4, y4), "\n\n\n")
-                    x1 = (x1 + x3) // 2
-                    y1 = (y1 + y3) // 2
-                    x2 = (x2 + x4) // 2
-                    y2 = (y2 + y4) // 2
-
-                    filtered_lines.append((x1, y1, x2, y2))
-                    print("yippee2")
-
-                else:
-                    filtered_lines.append((x1, y1, x2, y2))
-                    filtered_lines.append((x3, y3, x4, y4))
-                
-        for filtered_line in filtered_lines:
-            x1, y1, x2, y2 = filtered_line        
-            cv.line(warped_frame, (x1, y1), (x2, y2), (255, 0, 0), 2)
 
     return warped_frame
 
 def blend_lines(old_lines, new_lines, alpha=0.35):
-    pass
+    """
+    Blend new lines with old lines using a weighted moving average.
+    If a new line is close to an existing line, adjust it slightly for continuity.
+    """
+    if not old_lines or not new_lines:
+        return new_lines  # If no history, use new lines directly
+
+    blended = []
+    threshold_distance = 25  # Maximum distance to consider a line match
+    angle_tolerance = 15  # Maximum angle difference to consider a match
+
+    for new_line in new_lines:
+        x1_new, y1_new, x2_new, y2_new = new_line
+        best_match = None
+        min_distance = float('inf')
+
+        for old_line in old_lines:
+            x1_old, y1_old, x2_old, y2_old = old_line
+
+            # Compute distance between midpoints of lines
+            mid_x_new = (x1_new + x2_new) / 2
+            mid_y_new = (y1_new + y2_new) / 2
+            mid_x_old = (x1_old + x2_old) / 2
+            mid_y_old = (y1_old + y2_old) / 2
+            distance = np.hypot(mid_x_new - mid_x_old, mid_y_new - mid_y_old)
+
+            # Compute angle difference
+            angle_new = calculate_angle(new_line)
+            angle_old = calculate_angle(old_line)
+            angle_diff = abs(angle_new - angle_old)
+
+            if distance < threshold_distance and angle_diff < angle_tolerance:
+                if distance < min_distance:
+                    min_distance = distance
+                    best_match = old_line
+
+        if best_match:
+            # Blend old and new lines using weighted average
+            x1_old, y1_old, x2_old, y2_old = best_match
+            blended_x1 = int(alpha * x1_new + (1 - alpha) * x1_old)
+            blended_y1 = int(alpha * y1_new + (1 - alpha) * y1_old)
+            blended_x2 = int(alpha * x2_new + (1 - alpha) * x2_old)
+            blended_y2 = int(alpha * y2_new + (1 - alpha) * y2_old)
+
+            blended.append((blended_x1, blended_y1, blended_x2, blended_y2))
+        else:
+            blended.append(new_line)
+
+    return blended
 
 """cant we 
 def detect_lines(frame):
@@ -770,13 +761,14 @@ def display_fps(frame, start_time):
     return frame
 
 def main():
-    vid_path = "/Users/pl1001515/Downloads/Sunday Drive Along Country Roads During Spring, USA ｜ Driving Sounds for Sleep and Study.mp4" # vid path ________________________________________________________________________
+    vid_path = R"c:\Users\Owner\Downloads\pwp_data\videoplayback.webm" # vid path ________________________________________________________________________
     cap = cv.VideoCapture(vid_path)
 
     merged_lines = []
     merged_contours = []
     last_merged_lines = []
     blended_lines = []
+    line_history = deque (maxlen = 5)
     frame_skip = 2
 
     if not cap.isOpened():
@@ -842,32 +834,30 @@ def main():
 
         warped_width = warped_frame.shape[1]
         merge_line_frame = warped_frame.copy()
+        blend_frame = warped_frame.copy()
 
         if lines is not None:
-            print(f"Detected {len(lines)} lines: {lines}")
             new_merged_lines = merge_lines(lines, warped_width)
-
-            draw_midline_lines(merge_line_frame, new_merged_lines, warped_width) #----------------------------------------------------
+            draw_midline_lines(merge_line_frame, new_merged_lines, warped_width)
 
             for new_merged_line in new_merged_lines:
                 x1, y1, x2, y2 = new_merged_line
                 cv.line(merge_line_frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
 
             if last_merged_lines:
-                blended_lines = blend_lines(last_merged_lines, new_merged_lines, alpha=0.35)
-                #blended_lines = new_merged_lines
-                print("Blended Lines aaa:", blended_lines)
-
+                blended_lines = blend_lines(last_merged_lines, new_merged_lines)
             else:
                 blended_lines = new_merged_lines
-                print("No last merged lines, using new merged lines directly.")
 
             last_merged_lines = blended_lines
+            line_history.append(blended_lines)
 
             if blended_lines is not None:
+                draw_midline_lines(blend_frame, blended_lines, warped_width)
+                
                 for blended_lines in blended_lines:
                     x1, y1, x2, y2 = blended_lines
-                    cv.line(warped_frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
+                    cv.line(blend_frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
                 
             #print("Blended Lines:", len(blended_lines))
 
@@ -951,6 +941,7 @@ def main():
         cv.imshow("Merged Lines", merge_line_frame)
         #cv.imshow("Contrast Frame", contrast_frame)
         #cv.imshow("Enhanced Color Frame", enhance_color_frame)
+        cv.imshow("Blended Lines", blend_frame)
 
         if cv.waitKey(1) & 0xFF == ord('q'):
             break
