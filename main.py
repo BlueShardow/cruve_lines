@@ -66,8 +66,33 @@ def process_frame(frame):
 
     return frame
 
-def draw_arrow(frame, start_point, end_point, color, thickness):
-    cv.arrowedLine(frame, start_point, end_point, color, thickness)
+def draw_arrow(frame, lines):
+    best_x = 0
+    best_line = None
+
+    for line in lines:
+        x1, y1, x2, y2 = line
+        avg_x = (x1 + x2) // 2
+
+        if avg_x > best_x:
+            best_x = avg_x
+            best_line = line
+            #print("best line", best_line)
+
+    if best_line is not None:
+        #print("yippee")
+        x1, y1, x2, y2 = best_line
+        angle = calculate_angle(best_line)
+
+        arrowx1, arrowy1 = 25, 75
+        arrowx2 = int(arrowx1 - 50 * math.cos(math.radians(angle + 7)))
+        arrowy2 = int(arrowy1 - 50 * math.sin(math.radians(angle + 7)))
+
+        cv.arrowedLine(frame, (arrowx1, arrowy1), (arrowx2, arrowy2), (0, 255, 0), 2)
+
+    else:
+        cv.arrowedLine(frame, (25, 75), (25, 25), (0, 255, 0), 2)
+        #print("no line")
 
     return frame
 
@@ -93,24 +118,18 @@ def sobel_edges(frame):
 
     sobel_x = cv.Sobel(gray, cv.CV_64F, 1, 0, ksize=5)
     sobel_y = cv.Sobel(gray, cv.CV_64F, 0, 1, ksize=5)
-    edges = cv.magnitude(sobel_x, sobel_y)
 
-    # Normalize the result to 0-255 range
+    edges = cv.magnitude(sobel_x, sobel_y)
     edges = cv.normalize(edges, None, 0, 255, cv.NORM_MINMAX).astype(np.uint8)
 
-    # Apply a binary threshold
     _, binary_edges = cv.threshold(edges, 50, 255, cv.THRESH_BINARY)
-
     binary_edges = cv.dilate(binary_edges, None, iterations = 1) # do this multiple times, and next function
     binary_edges = cv.erode(binary_edges, None, iterations = 1)
-
     binary_edges = cv.medianBlur(binary_edges, 5)
     binary_edges = cv.bilateralFilter(binary_edges, 9, 75, 75)
 
-    # Find contours (connected edge regions)
     contours, _ = cv.findContours(binary_edges, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE)
-    
-    # Convert binary_edges to a 3-channel image for visualization
+
     binary_edges_bgr = cv.cvtColor(binary_edges, cv.COLOR_GRAY2BGR)
 
     lines = cv.HoughLinesP(binary_edges, rho = 1, theta = np.pi / 180, threshold = 100, minLineLength = 100, maxLineGap = 150)
@@ -219,7 +238,7 @@ def merge_lines(lines, width, height = 360, min_distance = 75, merge_angle_toler
         
     def adjust_towards_center(x1, y1, x2, y2, width):
         center_x = width // 2
-        adjustment_factor = 0.1  # Adjust this factor to control how much the lines lean towards the center
+        adjustment_factor = 0.1  
         slope = (y2 - y1) / (x2 - x1)
 
         if slope == 0:
@@ -310,10 +329,10 @@ def merge_lines(lines, width, height = 360, min_distance = 75, merge_angle_toler
             #new_x1, new_y1, new_x2, new_y2 = adjust_towards_center(new_x1, new_y1, new_x2, new_y2, width)
             
             merged_lines.append((int(new_x1), int(new_y1), int(new_x2), int(new_y2)))
-            print("merge lines in function", merged_lines)
+            #print("merge lines in function", merged_lines)
             used[i] = True
 
-        print("merged lines in 2", merged_lines)
+        #print("merged lines in 2", merged_lines)
         return merged_lines
 
     # Convert to a flattened list of (x1, y1, x2, y2)
@@ -370,11 +389,7 @@ def draw_midline_lines(warped_frame, blended_lines, width):
 
     return warped_frame
 
-def blend_lines(old_lines, new_lines, alpha=0.35):
-    """
-    Blend new lines with old lines using a weighted moving average.
-    If a new line is close to an existing line, adjust it slightly for continuity.
-    """
+def blend_lines(old_lines, new_lines, alpha = .35):
     if not old_lines or not new_lines:
         return new_lines  # If no history, use new lines directly
 
@@ -416,10 +431,114 @@ def blend_lines(old_lines, new_lines, alpha=0.35):
             blended_y2 = int(alpha * y2_new + (1 - alpha) * y2_old)
 
             blended.append((blended_x1, blended_y1, blended_x2, blended_y2))
+
         else:
             blended.append(new_line)
 
     return blended
+
+def detect_shadows(frame, old_frame, lines):
+    factors = 0
+    height, width = frame.shape[:2]
+    frame = frame[:height // 4 + 50, width // 4 - 50:]
+    mean_brightness = np.mean(frame)
+    shadow_bool = False
+
+    if old_frame is not None:
+        old_brightness = np.mean(old_frame)
+
+    else:
+        old_brightness = mean_brightness
+
+    #print("mean brightness", mean_brightness)
+
+    if len(lines) > 5:
+        factors += 1
+
+    if mean_brightness < 120:
+        factors += 1
+
+    if old_brightness > mean_brightness + 10:
+        factors += 1
+
+    if factors >= 2:
+        print("Shadow Detected\nmean brightness", mean_brightness, "\n")
+        shadow_bool = True
+
+    return frame, shadow_bool
+
+def calculate_optimal_lane_lines(frame, lines, old_lines, width):
+    optimal_lanes = []
+    optimal_left_lanes = []
+    optimal_right_lanes = []
+    lanes_final = []
+    optimal_lane_frame = frame.copy()
+
+    cv.line(optimal_lane_frame, (width // 2 - width // 4, 0), (width // 2 - width // 4, frame.shape[0]), (0, 0, 255), 2)
+    cv.line(optimal_lane_frame, (width // 2 + width // 4, 0), (width // 2 + width // 4, frame.shape[0]), (0, 0, 255), 2)
+
+    for line in lines:
+        x1, y1, x2, y2 = line
+
+        if x1 > width // 2 + width // 4 and x2 > width // 2 + width // 4:
+            optimal_right_lanes.append(line)
+
+        if width // 2 - width // 4 < x1 < width // 2 + width // 4 and width // 2 - width // 4 < x2 < width // 2 + width // 4:
+            optimal_left_lanes.append(line)
+
+    if optimal_right_lanes:
+        for optimal_right_lane in optimal_right_lanes:
+            best_angle = 0
+            x1, y1, x2, y2 = optimal_right_lane
+            angle = calculate_angle(optimal_right_lane)
+
+            if angle > best_angle:
+                best_angle = angle
+                optimal_lanes.append(optimal_right_lane)
+
+    if optimal_left_lanes:
+        for optimal_left_lane in optimal_left_lanes:
+            best_angle = 0
+            x1, y1, x2, y2 = optimal_left_lane
+            angle = calculate_angle(optimal_left_lane)
+
+            if angle > best_angle:
+                best_angle = angle
+                optimal_lanes.append(optimal_left_lane)
+
+    if len(old_lines) > 0:
+        if len(optimal_lanes) > 0:
+            for old_line in old_lines:
+                #x1, y1, x2, y2 = old_line
+                old_angle = calculate_angle(old_line)
+
+                for optimal_lane in optimal_lanes:
+                    #x3, y3, x4, y4 = optimal_lane
+                    new_angle = calculate_angle(optimal_lane)
+
+                    old_angle = abs(old_angle - 90)
+                    new_angle = abs(new_angle - 90)
+
+                    if old_angle < new_angle:
+                        lanes_final.append(old_line)
+
+                    else:
+                        lanes_final.append(optimal_lane)
+
+    if len(lanes_final) > 0:
+        for lane_final in lanes_final:
+            x1, y1, x2, y2 = lane_final
+            cv.line(optimal_lane_frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
+
+        return optimal_lane_frame, lanes_final
+        
+    else:
+        for optimal_lane in optimal_lanes:
+            x1, y1, x2, y2 = optimal_lane
+            cv.line(optimal_lane_frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
+
+        return optimal_lane_frame, optimal_lanes
+
 
 """cant we 
 def detect_lines(frame):
@@ -768,8 +887,11 @@ def main():
     merged_contours = []
     last_merged_lines = []
     blended_lines = []
-    line_history = deque (maxlen = 5)
-    frame_skip = 2
+    line_history = deque (maxlen = 100)
+    frame_skip = 10
+    frame_by_frame_mode = False
+    old_frame = None
+    optimal_lane_lines = []
 
     if not cap.isOpened():
         print("Error: Could not open video file.")
@@ -787,7 +909,7 @@ def main():
 
         frame_count += 1
 
-        if frame_count < 120:
+        if frame_count < 200:
             continue
 
         if frame_count % frame_skip != 0:
@@ -828,36 +950,50 @@ def main():
         cv.polylines(frame, [roi_points_np], True, (0, 255, 0), 2)
 
         warped_frame = get_perspective_transform(preprocessed_frame, roi_points, width, height)
-        frame = draw_arrow(frame, (25, 100), (25, 5), (0, 255, 0), 2)
-
         contour_frame, binary_frame, line_frame, lines = sobel_edges(warped_frame)
 
         warped_width = warped_frame.shape[1]
         merge_line_frame = warped_frame.copy()
         blend_frame = warped_frame.copy()
+        shadow_frame = warped_frame.copy()
+        optimal_frame = warped_frame.copy()
 
         if lines is not None:
             new_merged_lines = merge_lines(lines, warped_width)
             draw_midline_lines(merge_line_frame, new_merged_lines, warped_width)
+            shadow_frame, shadow_bool = detect_shadows(shadow_frame, old_frame, new_merged_lines)
+            #_, optimal_frame = calculate_optimal_lane_lines(optimal_frame, new_merged_lines, optimal_lane_lines, warped_width)
+            #optimal_lane_lines.append(calculate_optimal_lane_lines(optimal_frame, new_merged_lines, optimal_lane_lines, warped_width))
 
-            for new_merged_line in new_merged_lines:
-                x1, y1, x2, y2 = new_merged_line
-                cv.line(merge_line_frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
+            if shadow_bool:
+                if last_merged_lines:
+                    shadow_lines = line_history[-1]
 
-            if last_merged_lines:
-                blended_lines = blend_lines(last_merged_lines, new_merged_lines)
+                    for shadow_line in shadow_lines:
+                        x1, y1, x2, y2 = shadow_line
+                        cv.line(blend_frame, (x1, y1), (x2, y2), (0, 0, 255), 2)
+
             else:
-                blended_lines = new_merged_lines
+                for new_merged_line in new_merged_lines:
+                    x1, y1, x2, y2 = new_merged_line
+                    cv.line(merge_line_frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
 
-            last_merged_lines = blended_lines
-            line_history.append(blended_lines)
+                if last_merged_lines:
+                    blended_lines = blend_lines(last_merged_lines, new_merged_lines)
 
-            if blended_lines is not None:
-                draw_midline_lines(blend_frame, blended_lines, warped_width)
-                
-                for blended_lines in blended_lines:
-                    x1, y1, x2, y2 = blended_lines
-                    cv.line(blend_frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
+                else:
+                    blended_lines = new_merged_lines
+
+                last_merged_lines = blended_lines
+                line_history.append(blended_lines)
+                old_frame = shadow_frame
+
+                if blended_lines is not None:
+                    draw_midline_lines(blend_frame, blended_lines, warped_width)
+                    
+                    for blended_lines in blended_lines:
+                        x1, y1, x2, y2 = blended_lines
+                        cv.line(blend_frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
                 
             #print("Blended Lines:", len(blended_lines))
 
@@ -869,7 +1005,11 @@ def main():
                 x1, y1, x2, y2 = line[0]
                 cv.line(line_frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
 
-            print("Lines:", len(lines))
+            #print("Lines:", len(lines))
+
+        if new_merged_lines is not None:
+            frame = draw_arrow(frame, new_merged_lines)
+
 
         """
         if blended_lines is not None:
@@ -942,9 +1082,27 @@ def main():
         #cv.imshow("Contrast Frame", contrast_frame)
         #cv.imshow("Enhanced Color Frame", enhance_color_frame)
         cv.imshow("Blended Lines", blend_frame)
+        cv.imshow("Shadow Frame", shadow_frame)
 
-        if cv.waitKey(1) & 0xFF == ord('q'):
+        key = cv.waitKey(1) & 0xFF
+
+        if key == ord('q'):
             break
+
+        elif key == ord('f'):
+            frame_by_frame_mode = not frame_by_frame_mode
+
+        if frame_by_frame_mode:
+            while True:
+                key = cv.waitKey(0) & 0xFF
+
+                if key == ord('n'):
+                    break
+
+                elif key == ord('q'):
+                    cap.release()
+                    cv.destroyAllWindows()
+                    return
 
     cap.release()
     cv.destroyAllWindows()
