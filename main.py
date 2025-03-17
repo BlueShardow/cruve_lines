@@ -880,7 +880,7 @@ def display_fps(frame, start_time):
     return frame
 
 def main():
-    vid_path = R"c:\Users\Owner\Downloads\pwp_data\videoplayback.webm" # vid path ________________________________________________________________________
+    vid_path = "/Users/pl1001515/Downloads/Sunday Drive Along Country Roads During Spring, USA ｜ Driving Sounds for Sleep and Study.mp4" # vid path ________________________________________________________________________
     cap = cv.VideoCapture(vid_path)
 
     merged_lines = []
@@ -888,7 +888,7 @@ def main():
     last_merged_lines = []
     blended_lines = []
     line_history = deque (maxlen = 100)
-    frame_skip = 10
+    frame_skip = 3
     frame_by_frame_mode = False
     old_frame = None
     optimal_lane_lines = []
@@ -962,16 +962,19 @@ def main():
             new_merged_lines = merge_lines(lines, warped_width)
             draw_midline_lines(merge_line_frame, new_merged_lines, warped_width)
             shadow_frame, shadow_bool = detect_shadows(shadow_frame, old_frame, new_merged_lines)
-            #_, optimal_frame = calculate_optimal_lane_lines(optimal_frame, new_merged_lines, optimal_lane_lines, warped_width)
+            optimal_frame, _ = calculate_optimal_lane_lines(optimal_frame, new_merged_lines, optimal_lane_lines, warped_width)
             #optimal_lane_lines.append(calculate_optimal_lane_lines(optimal_frame, new_merged_lines, optimal_lane_lines, warped_width))
 
             if shadow_bool:
                 if last_merged_lines:
-                    shadow_lines = line_history[-1]
+                    merge_line_frame = optimal_frame
+                    blend_frame = optimal_frame
 
+                    """
                     for shadow_line in shadow_lines:
                         x1, y1, x2, y2 = shadow_line
                         cv.line(blend_frame, (x1, y1), (x2, y2), (0, 0, 255), 2)
+                    """
 
             else:
                 for new_merged_line in new_merged_lines:
@@ -1073,16 +1076,14 @@ def main():
 
         cv.imshow("Frame", frame)
         cv.imshow("Preprocessed Frame", preprocessed_frame)
-        cv.imshow("ROI Frame", roi_frame)
-        cv.imshow("Warped Frame", warped_frame)
-        cv.imshow("Binary Frame", binary_frame)
-        cv.imshow("Contour Frame", contour_frame)
-        cv.imshow("Line Frame", line_frame)
+        #cv.imshow("ROI Frame", roi_frame)
+        #cv.imshow("Warped Frame", warped_frame)
+        #cv.imshow("Binary Frame", binary_frame)
+        #cv.imshow("Contour Frame", contour_frame)
+        #cv.imshow("Line Frame", line_frame)
         cv.imshow("Merged Lines", merge_line_frame)
-        #cv.imshow("Contrast Frame", contrast_frame)
-        #cv.imshow("Enhanced Color Frame", enhance_color_frame)
         cv.imshow("Blended Lines", blend_frame)
-        cv.imshow("Shadow Frame", shadow_frame)
+        #cv.imshow("Shadow Frame", shadow_frame)
 
         key = cv.waitKey(1) & 0xFF
 
