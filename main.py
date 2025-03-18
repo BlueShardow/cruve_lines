@@ -487,8 +487,9 @@ def calculate_optimal_lane_lines(frame, lines, old_lines, width):
     lanes_final = []
     optimal_lane_frame = frame.copy()
 
-    cv.line(optimal_lane_frame, (width // 2 - width // 4, 0), (width // 2 - width // 4, frame.shape[0]), (0, 0, 255), 2)
-    cv.line(optimal_lane_frame, (width // 2 + width // 4, 0), (width // 2 + width // 4, frame.shape[0]), (0, 0, 255), 2)
+    cv.line(optimal_lane_frame, (width // 2 - width // 4, 0), (width // 2 - width // 4, frame.shape[0]), (0, 255, 0), 2) # left
+    cv.line(optimal_lane_frame, (width // 2 + width // 4, 0), (width // 2 + width // 4, frame.shape[0]), (0, 255, 0), 2) # right
+    cv.line(optimal_lane_frame, (width // 2 + 50, 0), (width // 2 + 50, frame.shape[0]), (0, 255, 0), 2) # center
 
     for line in lines:
         x1, y1, x2, y2 = line
@@ -496,7 +497,7 @@ def calculate_optimal_lane_lines(frame, lines, old_lines, width):
         if x1 > width // 2 + width // 4 and x2 > width // 2 + width // 4:
             optimal_right_lanes.append(line)
 
-        if width // 2 - width // 4 < x1 < width // 2 + width // 4 and width // 2 - width // 4 < x2 < width // 2 + width // 4:
+        if width // 2 - width // 4 < x1 < width // 2 + 50 and width // 2 - width // 4 < x2 < width // 2 + 50:
             optimal_left_lanes.append(line)
 
     if optimal_right_lanes:
