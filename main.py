@@ -440,32 +440,45 @@ def blend_lines(old_lines, new_lines, alpha = .35):
 def detect_shadows(frame, old_frame, lines):
     factors = 0
     height, width = frame.shape[:2]
-    frame = frame[:height // 4 + 50, width // 4 - 50:]
-    mean_brightness = np.mean(frame)
+    frame_whole = frame[:height, width // 4 + 250:]
+    frame_top = frame[:height // 2, width // 4 + 250:]
+    frame_bottom = frame[height // 2:, width // 4 + 250:]
+    mean_brightness_whole = np.mean(frame_whole)
+    mean_brightness_top = np.mean(frame_top)
+    mean_brightness_bottom = np.mean(frame_bottom)
     shadow_bool = False
 
     if old_frame is not None:
         old_brightness = np.mean(old_frame)
 
     else:
-        old_brightness = mean_brightness
+        old_brightness = mean_brightness_whole
 
     #print("mean brightness", mean_brightness)
 
     if len(lines) > 5:
         factors += 1
 
-    if mean_brightness < 120:
+    if mean_brightness_whole < 120:
+        factors += 1
+    
+    if mean_brightness_top < 120:
         factors += 1
 
-    if old_brightness > mean_brightness + 10:
+    if mean_brightness_bottom < 120:
+        factors += 1
+
+    if old_brightness > mean_brightness_whole + 20:
         factors += 1
 
     if factors >= 2:
-        print("Shadow Detected\nmean brightness", mean_brightness, "\n")
+        print("Shadow Detected\nmean brightness", mean_brightness_whole, "\n")
         shadow_bool = True
 
-    return frame, shadow_bool
+    cv.imshow("frame1", frame_top)
+    cv.imshow("frame2", frame_bottom)
+
+    return frame_whole, shadow_bool
 
 def calculate_optimal_lane_lines(frame, lines, old_lines, width):
     optimal_lanes = []
@@ -888,7 +901,7 @@ def main():
     last_merged_lines = []
     blended_lines = []
     line_history = deque (maxlen = 100)
-    frame_skip = 3
+    frame_skip = 2
     frame_by_frame_mode = False
     old_frame = None
     optimal_lane_lines = []
@@ -1076,14 +1089,14 @@ def main():
 
         cv.imshow("Frame", frame)
         cv.imshow("Preprocessed Frame", preprocessed_frame)
-        #cv.imshow("ROI Frame", roi_frame)
-        #cv.imshow("Warped Frame", warped_frame)
-        #cv.imshow("Binary Frame", binary_frame)
-        #cv.imshow("Contour Frame", contour_frame)
-        #cv.imshow("Line Frame", line_frame)
+        cv.imshow("ROI Frame", roi_frame)
+        cv.imshow("Warped Frame", warped_frame)
+        cv.imshow("Binary Frame", binary_frame)
+        cv.imshow("Contour Frame", contour_frame)
+        cv.imshow("Line Frame", line_frame)
         cv.imshow("Merged Lines", merge_line_frame)
         cv.imshow("Blended Lines", blend_frame)
-        #cv.imshow("Shadow Frame", shadow_frame)
+        cv.imshow("Shadow Frame", shadow_frame)
 
         key = cv.waitKey(1) & 0xFF
 
