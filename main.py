@@ -1088,11 +1088,11 @@ def main():
         """
 
         cv.imshow("Frame", frame)
-        cv.imshow("Preprocessed Frame", preprocessed_frame)
-        cv.imshow("ROI Frame", roi_frame)
+        #cv.imshow("Preprocessed Frame", preprocessed_frame)
+        #cv.imshow("ROI Frame", roi_frame)
         cv.imshow("Warped Frame", warped_frame)
-        cv.imshow("Binary Frame", binary_frame)
-        cv.imshow("Contour Frame", contour_frame)
+        #cv.imshow("Binary Frame", binary_frame)
+        #cv.imshow("Contour Frame", contour_frame)
         cv.imshow("Line Frame", line_frame)
         cv.imshow("Merged Lines", merge_line_frame)
         cv.imshow("Blended Lines", blend_frame)
